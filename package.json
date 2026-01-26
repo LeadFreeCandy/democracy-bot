@@ -1,0 +1,27 @@
+{
+  "name": "vote_bot",
+  "version": "1.0.0",
+  "description": "Discord bot for weekly movie night voting with pairwise comparison ranking",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "keywords": ["discord", "bot", "voting", "movies"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "sql.js": "^1.11.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/sql.js": "^1.4.9",
+    "@types/node": "^22.10.7",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
