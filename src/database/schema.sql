@@ -8,16 +8,6 @@ CREATE TABLE IF NOT EXISTS movies (
     watched_at INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS movie_responses (
-    user_id TEXT NOT NULL,
-    movie_id INTEGER NOT NULL,
-    response TEXT NOT NULL CHECK (response IN ('yes', 'no')),
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, movie_id)
-);
-
 CREATE TABLE IF NOT EXISTS pairwise_preferences (
     user_id TEXT NOT NULL,
     movie_a_id INTEGER NOT NULL,

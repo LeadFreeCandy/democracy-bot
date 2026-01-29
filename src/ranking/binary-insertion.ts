@@ -9,10 +9,6 @@ export interface ComparisonResult {
 }
 
 export function processChoice(session: RankingSession, choice: Choice): ComparisonResult {
-  if (session.phase !== 'ranking') {
-    return { done: true, rankedCount: 0 };
-  }
-
   session.comparisonCount++;
 
   // Record the pairwise preference

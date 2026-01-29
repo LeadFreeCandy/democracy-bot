@@ -1,15 +1,8 @@
 import { config } from '../config';
-import { responses, preferences } from '../database/queries';
-
-export type SessionPhase = 'ingestion' | 'ranking';
+import { movies, preferences } from '../database/queries';
 
 export interface RankingSession {
   userId: string;
-  phase: SessionPhase;
-  // Ingestion phase
-  pendingIngestion: number[];  // Movie IDs to ask Y/N
-  currentIngestionMovie: number | null;
-  ingestionCount: number;
   // Ranking phase
   movieToInsert: number;
   sortedList: number[];        // Already-ranked movie IDs
@@ -27,67 +20,39 @@ export interface RankingSession {
 
 const sessions = new Map<string, RankingSession>();
 
-export function createSession(
-  userId: string,
-  unrespondedMovieIds: number[],
-  moviesToRank: { id: number; response: 'yes' | 'no' }[]
-): RankingSession | null {
-  // If nothing to do, return null
-  if (unrespondedMovieIds.length === 0 && moviesToRank.length === 0) {
+export function createSession(userId: string): RankingSession | null {
+  // Get all unwatched movies
+  const unwatchedMovies = movies.getUnwatched();
+  if (unwatchedMovies.length === 0) {
+    return null;
+  }
+
+  const movieIds = unwatchedMovies.map(m => m.id);
+
+  // Get existing rankings from pairwise preferences
+  const existingRanked = getExistingRankedOrder(userId, movieIds);
+
+  // Movies not yet in the ranked list
+  const rankedSet = new Set(existingRanked);
+  const unrankedMovies = movieIds.filter(id => !rankedSet.has(id));
+
+  // If all movies are already ranked, nothing to do
+  if (unrankedMovies.length === 0) {
     return null;
   }
 
   const session: RankingSession = {
     userId,
-    phase: 'ingestion',
-    // Ingestion
-    pendingIngestion: [...unrespondedMovieIds],
-    currentIngestionMovie: unrespondedMovieIds[0] ?? null,
-    ingestionCount: 0,
-    // Ranking (will be set up after ingestion)
     movieToInsert: 0,
-    sortedList: [],
-    pendingMovies: [],
+    sortedList: existingRanked,
+    pendingMovies: unrankedMovies,
     low: 0,
     high: 0,
     currentMid: 0,
     comparisonCount: 0,
     moviesRankedThisSession: 0,
-    // Metadata
     createdAt: Date.now(),
   };
-
-  // If no ingestion needed, skip to ranking
-  if (unrespondedMovieIds.length === 0) {
-    setupRankingPhase(session, moviesToRank);
-  }
-
-  sessions.set(userId, session);
-  return session;
-}
-
-function setupRankingPhase(
-  session: RankingSession,
-  moviesToRank: { id: number; response: 'yes' | 'no' }[]
-): void {
-  session.phase = 'ranking';
-
-  // Filter out 'no' responses - only 'yes' movies get ranked
-  const rankableMovies = moviesToRank.filter(m => m.response === 'yes').map(m => m.id);
-
-  if (rankableMovies.length === 0) {
-    return;
-  }
-
-  // Get existing rankings from pairwise preferences
-  const existingRanked = getExistingRankedOrder(session.userId, rankableMovies);
-
-  // Movies not yet in the ranked list
-  const rankedSet = new Set(existingRanked);
-  const unrankedMovies = rankableMovies.filter(id => !rankedSet.has(id));
-
-  session.sortedList = existingRanked;
-  session.pendingMovies = unrankedMovies;
 
   // When sortedList is empty, first movie goes directly in (nothing to compare against)
   if (session.sortedList.length === 0 && session.pendingMovies.length > 0) {
@@ -103,7 +68,14 @@ function setupRankingPhase(
     session.low = 0;
     session.high = session.sortedList.length;
     session.currentMid = Math.floor((session.low + session.high) / 2);
+  } else {
+    // All movies processed (only one movie to rank, already added)
+    sessions.set(userId, session);
+    return session;
   }
+
+  sessions.set(userId, session);
+  return session;
 }
 
 function getExistingRankedOrder(userId: string, movieIds: number[]): number[] {
@@ -116,11 +88,12 @@ function getExistingRankedOrder(userId: string, movieIds: number[]): number[] {
     prefMap.set(`${p.movie_a_id}:${p.movie_b_id}`, p.preference);
   }
 
-  // Get movies that have been compared
+  // Get movies that have been compared (and are in the current movieIds list)
+  const movieIdSet = new Set(movieIds);
   const comparedMovies = new Set<number>();
   for (const p of prefs) {
-    if (movieIds.includes(p.movie_a_id)) comparedMovies.add(p.movie_a_id);
-    if (movieIds.includes(p.movie_b_id)) comparedMovies.add(p.movie_b_id);
+    if (movieIdSet.has(p.movie_a_id)) comparedMovies.add(p.movie_a_id);
+    if (movieIdSet.has(p.movie_b_id)) comparedMovies.add(p.movie_b_id);
   }
 
   const compare = (a: number, b: number): number => {
@@ -132,50 +105,6 @@ function getExistingRankedOrder(userId: string, movieIds: number[]): number[] {
   };
 
   return [...comparedMovies].sort(compare);
-}
-
-export function processIngestionResponse(
-  session: RankingSession,
-  response: 'yes' | 'no'
-): { done: boolean; startRanking: boolean } {
-  if (session.phase !== 'ingestion' || session.currentIngestionMovie === null) {
-    return { done: true, startRanking: false };
-  }
-
-  // Save response
-  responses.set(session.userId, session.currentIngestionMovie, response);
-  session.ingestionCount++;
-
-  // Remove from pending and get next
-  session.pendingIngestion.shift();
-
-  if (session.pendingIngestion.length === 0) {
-    // Ingestion done, check if we need to rank
-    const moviesToRank = responses.getMoviesToRank(session.userId);
-    const moviesWithResponses = moviesToRank.map(m => ({
-      id: m.id,
-      response: responses.getResponse(session.userId, m.id)!,
-    }));
-
-    if (moviesWithResponses.length === 0) {
-      sessions.delete(session.userId);
-      return { done: true, startRanking: false };
-    }
-
-    setupRankingPhase(session, moviesWithResponses);
-
-    // Check if there's actually ranking to do
-    // No movie to insert means nothing to rank (all movies already ranked or none to rank)
-    if (session.pendingMovies.length === 0 && session.movieToInsert === 0) {
-      sessions.delete(session.userId);
-      return { done: true, startRanking: false };
-    }
-
-    return { done: false, startRanking: true };
-  }
-
-  session.currentIngestionMovie = session.pendingIngestion[0];
-  return { done: false, startRanking: false };
 }
 
 export function getSession(userId: string): RankingSession | undefined {

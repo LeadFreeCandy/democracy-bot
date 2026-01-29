@@ -8,11 +8,6 @@ import {
   buildCancelledMessage,
 } from '../components/comparison';
 import {
-  IngestionButtonIds,
-  buildIngestionMessage,
-  buildIngestionCompleteMessage,
-} from '../components/ingestion';
-import {
   EditButtonIds,
   buildEditMenuMessage,
   buildDeleteMovieMessage,
@@ -22,12 +17,11 @@ import {
 } from '../components/edit-menu';
 import { buildSubmitMovieModal } from '../components/modals';
 import { RankingsButtonIds, buildUserRankingsMessage } from '../components/rankings-display';
-import { responses, dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday } from '../database/queries';
+import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday } from '../database/queries';
 import {
   createSession,
   getSession,
   deleteSession,
-  processIngestionResponse,
 } from '../ranking/session';
 import { processChoice, Choice } from '../ranking/binary-insertion';
 import { updateControlPanel, updateAttendancePanel } from './index';
@@ -120,19 +114,6 @@ export async function handleButtonInteraction(
       return;
   }
 
-  // Ingestion buttons
-  switch (action) {
-    case IngestionButtonIds.YES:
-      await handleIngestionResponse(interaction, 'yes', client);
-      return;
-    case IngestionButtonIds.NO:
-      await handleIngestionResponse(interaction, 'no', client);
-      return;
-    case IngestionButtonIds.CANCEL:
-      await handleCancel(interaction);
-      return;
-  }
-
   // Comparison buttons
   switch (action) {
     case ComparisonButtonIds.PREFER_A:
@@ -168,61 +149,32 @@ async function handleRankMovies(interaction: ButtonInteraction, client: Client):
     return;
   }
 
-  // Get unresponded movies (need Y/N)
-  const unrespondedMovies = responses.getUnrespondedMovies(userId);
-  const unrespondedIds = unrespondedMovies.map(m => m.id);
-
-  // Get movies that need ranking (already have Y response)
-  const moviesToRank = responses.getMoviesToRank(userId);
-  const moviesWithResponses = moviesToRank.map(m => ({
-    id: m.id,
-    response: responses.getResponse(userId, m.id)!,
-  }));
-
-  // Create session
-  const session = createSession(userId, unrespondedIds, moviesWithResponses);
+  // Create session for ranking
+  const session = createSession(userId);
 
   if (!session) {
     await interaction.reply({
-      content: "You're all caught up! No movies to check or rank.",
+      content: "You're all caught up! No movies to rank.",
       ephemeral: true,
     });
     return;
   }
 
-  // Send ephemeral message based on phase
-  if (session.phase === 'ingestion') {
+  // Check if ranking is already complete (all movies auto-inserted, no comparisons needed)
+  if (session.movieToInsert === 0) {
+    const rankedCount = session.moviesRankedThisSession;
+    deleteSession(userId);
     await interaction.reply({
-      ...buildIngestionMessage(session),
+      ...buildCompletionMessage(rankedCount),
       ephemeral: true,
     });
-  } else {
-    // Check if there's actually ranking to do
-    if (session.sortedList.length === 0 && session.pendingMovies.length === 0) {
-      deleteSession(userId);
-      await interaction.reply({
-        ...buildIngestionCompleteMessage(0),
-        ephemeral: true,
-      });
-      return;
-    }
-
-    // Check if ranking is already complete (all movies auto-inserted, no comparisons needed)
-    if (session.movieToInsert === 0) {
-      const rankedCount = session.moviesRankedThisSession;
-      deleteSession(userId);
-      await interaction.reply({
-        ...buildCompletionMessage(rankedCount),
-        ephemeral: true,
-      });
-      return;
-    }
-
-    await interaction.reply({
-      ...buildComparisonMessage(session),
-      ephemeral: true,
-    });
+    return;
   }
+
+  await interaction.reply({
+    ...buildComparisonMessage(session),
+    ephemeral: true,
+  });
 }
 
 async function handleMyRankings(interaction: ButtonInteraction): Promise<void> {
@@ -368,7 +320,7 @@ async function handleConfirmResetDb(interaction: ButtonInteraction, client: Clie
 async function handleConfirmResetMyData(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   resetUserData(userId);
-  await interaction.update(buildSuccessMessage('Data Reset', 'Your responses and rankings have been deleted.'));
+  await interaction.update(buildSuccessMessage('Data Reset', 'Your rankings have been deleted.'));
 }
 
 async function handleEditBack(interaction: ButtonInteraction): Promise<void> {
@@ -384,77 +336,6 @@ async function handleEditCancel(interaction: ButtonInteraction): Promise<void> {
   });
 }
 
-async function handleIngestionResponse(
-  interaction: ButtonInteraction,
-  response: 'yes' | 'no',
-  client: Client
-): Promise<void> {
-  const userId = interaction.user.id;
-  const session = getSession(userId);
-
-  if (!session || session.phase !== 'ingestion') {
-    await interaction.update({
-      content: 'Session expired. Click **Rank Movies** to start again.',
-      embeds: [],
-      components: [],
-    });
-    return;
-  }
-
-  const result = processIngestionResponse(session, response);
-
-  if (result.done) {
-    deleteSession(userId);
-    await interaction.update(buildIngestionCompleteMessage(session.ingestionCount));
-    return;
-  }
-
-  if (result.startRanking) {
-    // Transition to ranking phase
-    // Check if there's actually something to rank
-    if (session.movieToInsert === 0 || (session.sortedList.length === 0 && session.pendingMovies.length === 0)) {
-      // Nothing to rank (all movies were "no" or already ranked)
-      deleteSession(userId);
-      await interaction.update(buildIngestionCompleteMessage(session.ingestionCount));
-      return;
-    }
-
-    // Handle case where there's only one movie to rank
-    if (session.sortedList.length === 0 && session.pendingMovies.length === 0 && session.movieToInsert) {
-      session.sortedList = [session.movieToInsert];
-      session.moviesRankedThisSession = 1;
-      deleteSession(userId);
-      await interaction.update(buildCompletionMessage(1));
-      return;
-    }
-
-    // Need at least 2 movies to compare
-    if (session.sortedList.length === 0 && session.movieToInsert) {
-      // First movie goes in automatically
-      session.sortedList = [session.movieToInsert];
-      session.moviesRankedThisSession = 1;
-
-      if (session.pendingMovies.length === 0) {
-        deleteSession(userId);
-        await interaction.update(buildCompletionMessage(1));
-        return;
-      }
-
-      // Set up next movie for comparison
-      session.movieToInsert = session.pendingMovies.shift()!;
-      session.low = 0;
-      session.high = session.sortedList.length;
-      session.currentMid = Math.floor((session.low + session.high) / 2);
-    }
-
-    await interaction.update(buildComparisonMessage(session));
-    return;
-  }
-
-  // Continue ingestion
-  await interaction.update(buildIngestionMessage(session));
-}
-
 async function handlePreference(
   interaction: ButtonInteraction,
   choice: Choice,
@@ -463,7 +344,7 @@ async function handlePreference(
   const userId = interaction.user.id;
   const session = getSession(userId);
 
-  if (!session || session.phase !== 'ranking') {
+  if (!session) {
     await interaction.update({
       content: 'Session expired. Click **Rank Movies** to start again.',
       embeds: [],

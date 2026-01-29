@@ -11,14 +11,6 @@ export interface Movie {
   watched_at: number | null;
 }
 
-export interface MovieResponse {
-  user_id: string;
-  movie_id: number;
-  response: 'yes' | 'no';
-  created_at: number;
-  updated_at: number;
-}
-
 export interface PairwisePreference {
   user_id: string;
   movie_a_id: number;
@@ -118,62 +110,6 @@ export const movies = {
   },
 };
 
-// Movie response queries (yes/no)
-export const responses = {
-  set(userId: string, movieId: number, response: 'yes' | 'no'): void {
-    const now = Date.now();
-    execute(
-      `INSERT INTO movie_responses (user_id, movie_id, response, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, movie_id) DO UPDATE SET response = ?, updated_at = ?`,
-      [userId, movieId, response, now, now, response, now]
-    );
-  },
-
-  get(userId: string, movieId: number): MovieResponse | undefined {
-    return queryOne<MovieResponse>(
-      'SELECT * FROM movie_responses WHERE user_id = ? AND movie_id = ?',
-      [userId, movieId]
-    );
-  },
-
-  getForUser(userId: string): MovieResponse[] {
-    return queryAll<MovieResponse>(
-      'SELECT * FROM movie_responses WHERE user_id = ? ORDER BY updated_at DESC',
-      [userId]
-    );
-  },
-
-  getUnrespondedMovies(userId: string): Movie[] {
-    return queryAll<Movie>(
-      `SELECT m.* FROM movies m
-       WHERE m.watched = 0
-       AND m.id NOT IN (SELECT movie_id FROM movie_responses WHERE user_id = ?)
-       ORDER BY m.created_at ASC`,
-      [userId]
-    );
-  },
-
-  getMoviesToRank(userId: string): Movie[] {
-    // Movies where response is 'yes' (not 'no')
-    return queryAll<Movie>(
-      `SELECT m.* FROM movies m
-       JOIN movie_responses mr ON m.id = mr.movie_id AND mr.user_id = ?
-       WHERE m.watched = 0 AND mr.response = 'yes'
-       ORDER BY m.created_at ASC`,
-      [userId]
-    );
-  },
-
-  getResponse(userId: string, movieId: number): 'yes' | 'no' | undefined {
-    const result = queryOne<{ response: string }>(
-      'SELECT response FROM movie_responses WHERE user_id = ? AND movie_id = ?',
-      [userId, movieId]
-    );
-    return result?.response as 'yes' | 'no' | undefined;
-  },
-};
-
 // Pairwise preference queries
 export const preferences = {
   record(userId: string, movieAId: number, movieBId: number, preference: number): void {
@@ -214,10 +150,21 @@ export const preferences = {
 
 // Compute rankings from pairwise preferences using topological sort
 export function computeRankings(userId: string): { movieId: number; title: string }[] {
-  const moviesToRank = responses.getMoviesToRank(userId);
-  if (moviesToRank.length === 0) return [];
-
   const prefs = preferences.getForUser(userId);
+  if (prefs.length === 0) return [];
+
+  // Get all movies that user has ranked (appeared in any pairwise comparison)
+  const rankedMovieIds = new Set<number>();
+  for (const p of prefs) {
+    rankedMovieIds.add(p.movie_a_id);
+    rankedMovieIds.add(p.movie_b_id);
+  }
+
+  // Filter to only unwatched movies
+  const unwatchedMovies = movies.getUnwatched();
+  const moviesToRank = unwatchedMovies.filter(m => rankedMovieIds.has(m.id));
+
+  if (moviesToRank.length === 0) return [];
 
   // Build a comparison function from preferences
   const prefMap = new Map<string, number>();
@@ -239,9 +186,9 @@ export function computeRankings(userId: string): { movieId: number; title: strin
   return sorted.map(m => ({ movieId: m.id, title: m.title }));
 }
 
-// Get movies that need ranking (have response but no pairwise comparisons yet)
+// Get unwatched movies that user hasn't ranked yet
 export function getUnrankedMovies(userId: string): Movie[] {
-  const moviesToRank = responses.getMoviesToRank(userId);
+  const unwatchedMovies = movies.getUnwatched();
   const prefs = preferences.getForUser(userId);
 
   // Get set of all movies that have been compared
@@ -252,14 +199,14 @@ export function getUnrankedMovies(userId: string): Movie[] {
   }
 
   // Return movies that haven't been compared yet
-  return moviesToRank.filter(m => !comparedMovies.has(m.id));
+  return unwatchedMovies.filter(m => !comparedMovies.has(m.id));
 }
 
 // Condorcet election result
 export interface CondorcetResult {
   movieId: number;
   title: string;
-  willingCount: number;  // Number of users who said 'yes'
+  rankedByCount: number; // Number of attendees who have ranked this movie
   wins: number;          // Head-to-head wins (from locked pairs)
   losses: number;        // Head-to-head losses (from locked pairs)
   ties: number;          // Head-to-head ties
@@ -305,6 +252,10 @@ function wouldCreateCycle(
  * Compute aggregate movie rankings using Ranked Pairs (Tideman) method.
  * Only counts votes from users who have marked themselves as attending.
  *
+ * Key ranking logic:
+ * - If a user hasn't ranked a movie, they prefer all their ranked movies over it
+ * - Unranked movies are tied with each other (no preference between them)
+ *
  * 1. For each pair of movies, compute margin of victory (votes for winner - votes for loser)
  * 2. Sort pairs by margin (strongest victories first)
  * 3. Lock in pairs that don't create cycles
@@ -323,23 +274,6 @@ export function computeCondorcetRanking(): CondorcetResult[] {
     'SELECT * FROM pairwise_preferences'
   ).filter(p => attendeeSet.has(p.user_id));
 
-  // Get willing watchers count for each movie (only attendees)
-  const willingCounts = new Map<number, number>();
-  for (const movie of unwatchedMovies) {
-    if (attendeeSet.size === 0) {
-      willingCounts.set(movie.id, 0);
-    } else {
-      const attendeeList = [...attendeeSet];
-      const placeholders = attendeeList.map(() => '?').join(',');
-      const count = queryOne<{ count: number }>(
-        `SELECT COUNT(*) as count FROM movie_responses
-         WHERE movie_id = ? AND response = 'yes' AND user_id IN (${placeholders})`,
-        [movie.id, ...attendeeList]
-      );
-      willingCounts.set(movie.id, count?.count ?? 0);
-    }
-  }
-
   // Build preference lookup: userId -> (movieA, movieB) -> preference
   const userPrefs = new Map<string, Map<string, number>>();
   for (const pref of allPrefs) {
@@ -350,18 +284,27 @@ export function computeCondorcetRanking(): CondorcetResult[] {
     userPrefs.get(pref.user_id)!.set(key, pref.preference);
   }
 
-  // Build response lookup: userId -> movieId -> 'yes' | 'no'
-  // This is used to determine implicit preferences (yes > no)
-  const userResponses = new Map<string, Map<number, string>>();
-  const allResponses = queryAll<MovieResponse>(
-    'SELECT * FROM movie_responses'
-  ).filter(r => attendeeSet.has(r.user_id));
-
-  for (const resp of allResponses) {
-    if (!userResponses.has(resp.user_id)) {
-      userResponses.set(resp.user_id, new Map());
+  // Build set of ranked movies per user (movies that appear in any pairwise comparison)
+  const userRankedMovies = new Map<string, Set<number>>();
+  for (const pref of allPrefs) {
+    if (!userRankedMovies.has(pref.user_id)) {
+      userRankedMovies.set(pref.user_id, new Set());
     }
-    userResponses.get(resp.user_id)!.set(resp.movie_id, resp.response);
+    userRankedMovies.get(pref.user_id)!.add(pref.movie_a_id);
+    userRankedMovies.get(pref.user_id)!.add(pref.movie_b_id);
+  }
+
+  // Count how many attendees have ranked each movie
+  const rankedByCounts = new Map<number, number>();
+  for (const movie of unwatchedMovies) {
+    let count = 0;
+    for (const attendeeId of attendeeSet) {
+      const rankedSet = userRankedMovies.get(attendeeId);
+      if (rankedSet?.has(movie.id)) {
+        count++;
+      }
+    }
+    rankedByCounts.set(movie.id, count);
   }
 
   const movieIds = unwatchedMovies.map(m => m.id);
@@ -384,10 +327,10 @@ export function computeCondorcetRanking(): CondorcetResult[] {
       // Check each attendee's preference
       for (const attendeeId of attendeeSet) {
         const prefMap = userPrefs.get(attendeeId);
-        const respMap = userResponses.get(attendeeId);
+        const rankedSet = userRankedMovies.get(attendeeId);
 
-        const responseA = respMap?.get(movieA);
-        const responseB = respMap?.get(movieB);
+        const rankedA = rankedSet?.has(movieA) ?? false;
+        const rankedB = rankedSet?.has(movieB) ?? false;
 
         // If user has explicit pairwise preference, use it
         if (prefMap) {
@@ -407,14 +350,14 @@ export function computeCondorcetRanking(): CondorcetResult[] {
           }
         }
 
-        // No explicit preference - use implicit preference from yes/no responses
-        // "yes" always beats "no"
-        if (responseA === 'yes' && responseB === 'no') {
+        // No explicit preference - use implicit preference from ranking status
+        // If user ranked one movie but not the other, they prefer the ranked one
+        if (rankedA && !rankedB) {
           votesForA++;
-        } else if (responseA === 'no' && responseB === 'yes') {
+        } else if (rankedB && !rankedA) {
           votesForB++;
         }
-        // If both yes or both no (or no response), no implicit preference
+        // If user ranked both (but no explicit preference) or neither, no vote
       }
 
       if (votesForA > votesForB) {
@@ -429,12 +372,12 @@ export function computeCondorcetRanking(): CondorcetResult[] {
     }
   }
 
-  // Sort pairs by margin (highest first), then by winner's willingCount as tiebreaker
+  // Sort pairs by margin (highest first), then by rankedByCount as tiebreaker
   pairs.sort((a, b) => {
     if (b.margin !== a.margin) return b.margin - a.margin;
-    const aWilling = willingCounts.get(a.winner) ?? 0;
-    const bWilling = willingCounts.get(b.winner) ?? 0;
-    return bWilling - aWilling;
+    const aRanked = rankedByCounts.get(a.winner) ?? 0;
+    const bRanked = rankedByCounts.get(b.winner) ?? 0;
+    return bRanked - aRanked;
   });
 
   // Lock in pairs that don't create cycles
@@ -490,21 +433,21 @@ export function computeCondorcetRanking(): CondorcetResult[] {
 
     if (sources.length === 0) {
       // Cycle detected (shouldn't happen with proper cycle detection)
-      // Just add remaining in willingCount order
+      // Just add remaining in rankedByCount order
       const rest = [...remaining].sort((a, b) => {
-        const wA = willingCounts.get(a) ?? 0;
-        const wB = willingCounts.get(b) ?? 0;
-        return wB - wA;
+        const rA = rankedByCounts.get(a) ?? 0;
+        const rB = rankedByCounts.get(b) ?? 0;
+        return rB - rA;
       });
       ranking.push(...rest);
       break;
     }
 
-    // Sort sources by willingCount (tiebreaker)
+    // Sort sources by rankedByCount (tiebreaker)
     sources.sort((a, b) => {
-      const wA = willingCounts.get(a) ?? 0;
-      const wB = willingCounts.get(b) ?? 0;
-      if (wB !== wA) return wB - wA;
+      const rA = rankedByCounts.get(a) ?? 0;
+      const rB = rankedByCounts.get(b) ?? 0;
+      if (rB !== rA) return rB - rA;
       // Final tiebreaker: alphabetical by title
       const movieA = unwatchedMovies.find(m => m.id === a);
       const movieB = unwatchedMovies.find(m => m.id === b);
@@ -531,7 +474,7 @@ export function computeCondorcetRanking(): CondorcetResult[] {
     return {
       movieId: id,
       title: movie.title,
-      willingCount: willingCounts.get(id) ?? 0,
+      rankedByCount: rankedByCounts.get(id) ?? 0,
       wins: wins.get(id) ?? 0,
       losses: losses.get(id) ?? 0,
       ties: tieCount.get(id) ?? 0,
@@ -636,18 +579,31 @@ export function formatEventDate(dateStr: string): string {
 
 // Users queries
 export const users = {
-  getWithUnrespondedMovies(): string[] {
-    // Get users who have responded to at least one movie but have unresponded movies
-    const results = queryAll<{ user_id: string }>(
-      `SELECT DISTINCT mr.user_id
-       FROM movie_responses mr
-       WHERE EXISTS (
-         SELECT 1 FROM movies m
-         WHERE m.watched = 0
-         AND m.id NOT IN (SELECT movie_id FROM movie_responses WHERE user_id = mr.user_id)
-       )`
-    );
-    return results.map(r => r.user_id);
+  getWithUnrankedMovies(): string[] {
+    // Get users who have ranked at least one movie but have unranked movies
+    const prefs = queryAll<{ user_id: string }>('SELECT DISTINCT user_id FROM pairwise_preferences');
+    const unwatchedMovies = movies.getUnwatched();
+    const unwatchedIds = new Set(unwatchedMovies.map(m => m.id));
+
+    const usersWithUnranked: string[] = [];
+    for (const { user_id } of prefs) {
+      // Get movies this user has ranked
+      const userPrefs = queryAll<{ movie_a_id: number; movie_b_id: number }>(
+        'SELECT movie_a_id, movie_b_id FROM pairwise_preferences WHERE user_id = ?',
+        [user_id]
+      );
+      const rankedIds = new Set<number>();
+      for (const p of userPrefs) {
+        if (unwatchedIds.has(p.movie_a_id)) rankedIds.add(p.movie_a_id);
+        if (unwatchedIds.has(p.movie_b_id)) rankedIds.add(p.movie_b_id);
+      }
+
+      // Check if there are unwatched movies they haven't ranked
+      if (rankedIds.size < unwatchedIds.size) {
+        usersWithUnranked.push(user_id);
+      }
+    }
+    return usersWithUnranked;
   },
 };
 
@@ -660,7 +616,6 @@ export interface CondorcetMatrix {
 
 export interface DatabaseDump {
   movies: Movie[];
-  movie_responses: MovieResponse[];
   pairwise_preferences: PairwisePreference[];
   condorcet_matrix: CondorcetMatrix;
 }
@@ -718,7 +673,8 @@ function formatCondorcetAsciiTable(titles: string[], matrix: number[][]): string
 /**
  * Compute the Condorcet pairwise comparison matrix.
  * matrix[i][j] = number of voters who prefer movie i over movie j
- * Only counts votes from attendees, and considers "no" responses as ranked below "yes".
+ * Only counts votes from attendees.
+ * If a user ranked movie i but not j, they prefer i over j.
  */
 export function computeCondorcetMatrix(): CondorcetMatrix {
   const unwatchedMovies = movies.getUnwatched();
@@ -752,22 +708,15 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
     userPrefs.get(pref.user_id)!.set(key, pref.preference);
   }
 
-  // Build response lookup: userId -> movieId -> 'yes' | 'no'
-  const userResponses = new Map<string, Map<number, string>>();
-  const allResponses = queryAll<MovieResponse>(
-    'SELECT * FROM movie_responses'
-  ).filter(r => attendeeSet.has(r.user_id));
-
-  for (const resp of allResponses) {
-    if (!userResponses.has(resp.user_id)) {
-      userResponses.set(resp.user_id, new Map());
+  // Build set of ranked movies per user
+  const userRankedMovies = new Map<string, Set<number>>();
+  for (const pref of allPrefs) {
+    if (!userRankedMovies.has(pref.user_id)) {
+      userRankedMovies.set(pref.user_id, new Set());
     }
-    userResponses.get(resp.user_id)!.set(resp.movie_id, resp.response);
+    userRankedMovies.get(pref.user_id)!.add(pref.movie_a_id);
+    userRankedMovies.get(pref.user_id)!.add(pref.movie_b_id);
   }
-
-  // Build index lookup
-  const idToIndex = new Map<number, number>();
-  movieIds.forEach((id, idx) => idToIndex.set(id, idx));
 
   // Fill matrix by checking each pair for each attendee
   for (let i = 0; i < n; i++) {
@@ -779,10 +728,10 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
 
       for (const attendeeId of attendeeSet) {
         const prefMap = userPrefs.get(attendeeId);
-        const respMap = userResponses.get(attendeeId);
+        const rankedSet = userRankedMovies.get(attendeeId);
 
-        const responseA = respMap?.get(movieA);
-        const responseB = respMap?.get(movieB);
+        const rankedA = rankedSet?.has(movieA) ?? false;
+        const rankedB = rankedSet?.has(movieB) ?? false;
 
         // Check explicit preference first
         let hasExplicitPref = false;
@@ -801,9 +750,9 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
           }
         }
 
-        // If no explicit preference, use implicit from yes/no
+        // If no explicit preference, use implicit from ranking status
         if (!hasExplicitPref) {
-          if (responseA === 'yes' && responseB === 'no') {
+          if (rankedA && !rankedB) {
             matrix[i][j]++;
           }
         }
@@ -819,7 +768,6 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
 export function dumpDatabase(): DatabaseDump {
   return {
     movies: queryAll<Movie>('SELECT * FROM movies ORDER BY id'),
-    movie_responses: queryAll<MovieResponse>('SELECT * FROM movie_responses ORDER BY user_id, movie_id'),
     pairwise_preferences: queryAll<PairwisePreference>(
       'SELECT * FROM pairwise_preferences ORDER BY user_id, movie_a_id, movie_b_id'
     ),
@@ -830,17 +778,14 @@ export function dumpDatabase(): DatabaseDump {
 // Admin functions
 export function deleteMovie(movieId: number): void {
   execute('DELETE FROM pairwise_preferences WHERE movie_a_id = ? OR movie_b_id = ?', [movieId, movieId]);
-  execute('DELETE FROM movie_responses WHERE movie_id = ?', [movieId]);
   execute('DELETE FROM movies WHERE id = ?', [movieId]);
 }
 
 export function resetDatabase(): void {
   execute('DELETE FROM pairwise_preferences');
-  execute('DELETE FROM movie_responses');
   execute('DELETE FROM movies');
 }
 
 export function resetUserData(userId: string): void {
   execute('DELETE FROM pairwise_preferences WHERE user_id = ?', [userId]);
-  execute('DELETE FROM movie_responses WHERE user_id = ?', [userId]);
 }

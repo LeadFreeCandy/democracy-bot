@@ -27,11 +27,11 @@ export function buildQueueEmbed(): EmbedBuilder {
       .setFooter({ text: 'Submit a movie · Rank your choices · Watch together' });
   }
 
-  // Format: "1. Movie Title (3 interested)"
+  // Format: "1. Movie Title (3 ranked)"
   const queueList = rankings
     .map((r, i) => {
-      const interested = r.willingCount === 0 ? '' : ` — ${r.willingCount} interested`;
-      return `**${i + 1}.** ${r.title}${interested}`;
+      const rankedBy = r.rankedByCount === 0 ? '' : ` — ${r.rankedByCount} ranked`;
+      return `**${i + 1}.** ${r.title}${rankedBy}`;
     })
     .join('\n');
 

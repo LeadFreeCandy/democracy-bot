@@ -1,5 +1,5 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
-import { computeRankings, responses } from '../database/queries';
+import { computeRankings, getUnrankedMovies } from '../database/queries';
 
 export const RankingsButtonIds = {
   RANK_MOVIES: 'rankings_rank_movies',
@@ -8,7 +8,7 @@ export const RankingsButtonIds = {
 
 export function buildUserRankingsEmbed(userId: string): EmbedBuilder {
   const rankings = computeRankings(userId);
-  const unrankedCount = responses.getMoviesToRank(userId).length - rankings.length;
+  const unrankedMovies = getUnrankedMovies(userId);
 
   if (rankings.length === 0) {
     return new EmbedBuilder()
@@ -21,8 +21,8 @@ export function buildUserRankingsEmbed(userId: string): EmbedBuilder {
     .map((r, i) => `**${i + 1}.** ${r.title}`)
     .join('\n');
 
-  const footer = unrankedCount > 0
-    ? `${rankings.length} ranked · ${unrankedCount} still to rank`
+  const footer = unrankedMovies.length > 0
+    ? `${rankings.length} ranked · ${unrankedMovies.length} still to rank`
     : `${rankings.length} movies ranked`;
 
   return new EmbedBuilder()
