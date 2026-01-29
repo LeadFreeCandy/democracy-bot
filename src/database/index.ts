@@ -38,6 +38,9 @@ export async function initializeDatabase(): Promise<void> {
   const schema = fs.readFileSync(schemaPath, 'utf-8');
   db.exec(schema);
 
+  // Migration: drop old responses table from movie check phase (no longer used)
+  db.exec('DROP TABLE IF EXISTS responses');
+
   // Save database
   saveDatabase();
 }

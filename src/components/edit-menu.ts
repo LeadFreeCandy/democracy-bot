@@ -140,7 +140,6 @@ export function buildConfirmResetDbEmbed(): EmbedBuilder {
       '**Are you sure you want to reset the entire database?**\n\n' +
       'This will delete:\n' +
       '- All movies\n' +
-      '- All responses\n' +
       '- All rankings\n\n' +
       '**This cannot be undone!**'
     )
@@ -153,7 +152,6 @@ export function buildConfirmResetMyDataEmbed(): EmbedBuilder {
     .setDescription(
       '**Are you sure you want to reset your data?**\n\n' +
       'This will delete:\n' +
-      '- Your movie responses (Yes/No)\n' +
       '- Your movie rankings\n\n' +
       '**This cannot be undone!**'
     )
