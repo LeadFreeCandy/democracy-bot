@@ -148,42 +148,291 @@ export const preferences = {
   },
 };
 
-// Compute rankings from pairwise preferences using topological sort
-export function computeRankings(userId: string): { movieId: number; title: string }[] {
-  const prefs = preferences.getForUser(userId);
-  if (prefs.length === 0) return [];
+export interface RankedMovie {
+  movieId: number;
+  title: string;
+  rank: number;
+}
 
-  // Get all movies that user has ranked (appeared in any pairwise comparison)
-  const rankedMovieIds = new Set<number>();
+export interface RankingResult {
+  ranked: RankedMovie[];
+  unranked: { movieId: number; title: string }[];
+}
+
+// Compute rankings from pairwise preferences using topological sort
+export function computeRankings(userId: string): RankingResult {
+  const prefs = preferences.getForUser(userId);
+  if (prefs.length === 0) return { ranked: [], unranked: [] };
+
+  // Get all movies that user has compared (appeared in any pairwise comparison)
+  const comparedMovieIds = new Set<number>();
   for (const p of prefs) {
-    rankedMovieIds.add(p.movie_a_id);
-    rankedMovieIds.add(p.movie_b_id);
+    comparedMovieIds.add(p.movie_a_id);
+    comparedMovieIds.add(p.movie_b_id);
   }
 
   // Filter to only unwatched movies
   const unwatchedMovies = movies.getUnwatched();
-  const moviesToRank = unwatchedMovies.filter(m => rankedMovieIds.has(m.id));
+  const moviesToRank = unwatchedMovies.filter(m => comparedMovieIds.has(m.id));
 
-  if (moviesToRank.length === 0) return [];
+  if (moviesToRank.length === 0) return { ranked: [], unranked: [] };
 
-  // Build a comparison function from preferences
-  const prefMap = new Map<string, number>();
+  const movieIds = moviesToRank.map(m => m.id);
+  const movieMap = new Map(moviesToRank.map(m => [m.id, m]));
+
+  // Track which pairs have been compared (regardless of preference value)
+  const comparedPairs = new Set<string>();
   for (const p of prefs) {
-    prefMap.set(`${p.movie_a_id}:${p.movie_b_id}`, p.preference);
+    comparedPairs.add(`${p.movie_a_id}:${p.movie_b_id}`);
+    comparedPairs.add(`${p.movie_b_id}:${p.movie_a_id}`);
   }
 
-  const compare = (a: number, b: number): number => {
-    const key1 = `${a}:${b}`;
-    const key2 = `${b}:${a}`;
-    if (prefMap.has(key1)) return -prefMap.get(key1)!; // Negative because lower = better
-    if (prefMap.has(key2)) return prefMap.get(key2)!;
-    return 0;
-  };
+  // Build directed graph: edge from A to B means A is preferred over B
+  const graph = new Map<number, Set<number>>();
+  const inDegree = new Map<number, number>();
 
-  // Sort movies by preferences
-  const sorted = [...moviesToRank].sort((a, b) => compare(a.id, b.id));
+  for (const id of movieIds) {
+    graph.set(id, new Set());
+    inDegree.set(id, 0);
+  }
 
-  return sorted.map(m => ({ movieId: m.id, title: m.title }));
+  // Add edges based on preferences
+  for (const p of prefs) {
+    const a = p.movie_a_id;
+    const b = p.movie_b_id;
+
+    // Skip if either movie is not in our list (might be watched)
+    if (!graph.has(a) || !graph.has(b)) continue;
+
+    if (p.preference > 0) {
+      // A preferred over B: edge A -> B
+      if (!graph.get(a)!.has(b)) {
+        graph.get(a)!.add(b);
+        inDegree.set(b, inDegree.get(b)! + 1);
+      }
+    } else if (p.preference < 0) {
+      // B preferred over A: edge B -> A
+      if (!graph.get(b)!.has(a)) {
+        graph.get(b)!.add(a);
+        inDegree.set(a, inDegree.get(a)! + 1);
+      }
+    }
+    // preference === 0: no edge (explicit tie)
+  }
+
+  // Build undirected comparison graph for connectivity (includes ties)
+  // Movies are connected if they've been compared, regardless of preference value
+  const comparisonGraph = new Map<number, Set<number>>();
+  for (const id of movieIds) {
+    comparisonGraph.set(id, new Set());
+  }
+  for (const p of prefs) {
+    const a = p.movie_a_id;
+    const b = p.movie_b_id;
+    if (comparisonGraph.has(a) && comparisonGraph.has(b)) {
+      comparisonGraph.get(a)!.add(b);
+      comparisonGraph.get(b)!.add(a);
+    }
+  }
+
+  // Find connected components using comparison graph (not preference graph)
+  const visited = new Set<number>();
+  const components: number[][] = [];
+
+  function dfs(start: number): number[] {
+    const component: number[] = [];
+    const stack = [start];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (visited.has(node)) continue;
+      visited.add(node);
+      component.push(node);
+      // Follow comparison edges (undirected)
+      for (const neighbor of comparisonGraph.get(node) ?? []) {
+        if (!visited.has(neighbor)) stack.push(neighbor);
+      }
+    }
+    return component;
+  }
+
+  for (const id of movieIds) {
+    if (!visited.has(id)) {
+      components.push(dfs(id));
+    }
+  }
+
+  // Find the largest connected component - this is the "main" ranking
+  // Other components go to unranked
+  components.sort((a, b) => b.length - a.length);
+  const mainComponent = new Set(components[0] ?? []);
+  const unrankedIds = movieIds.filter(id => !mainComponent.has(id));
+
+  // Topological sort the main component using Kahn's algorithm
+  // Movies at same level share the same rank
+  const ranked: RankedMovie[] = [];
+  const remaining = new Set(mainComponent);
+  let currentRank = 1;
+
+  // Recalculate in-degrees for just the main component
+  const componentInDegree = new Map<number, number>();
+  for (const id of mainComponent) {
+    componentInDegree.set(id, 0);
+  }
+  for (const [from, tos] of graph) {
+    if (!mainComponent.has(from)) continue;
+    for (const to of tos) {
+      if (mainComponent.has(to)) {
+        componentInDegree.set(to, componentInDegree.get(to)! + 1);
+      }
+    }
+  }
+
+  while (remaining.size > 0) {
+    // Find all nodes with in-degree 0
+    const sources: number[] = [];
+    for (const id of remaining) {
+      if (componentInDegree.get(id) === 0) {
+        sources.push(id);
+      }
+    }
+
+    if (sources.length === 0) {
+      // Cycle detected - add remaining as unranked
+      for (const id of remaining) {
+        unrankedIds.push(id);
+      }
+      break;
+    }
+
+    // Check which sources are truly tied (have explicit comparison with preference=0)
+    // vs which just haven't been compared
+    const tiedGroups: number[][] = [];
+    const sourcesRemaining = new Set(sources);
+
+    while (sourcesRemaining.size > 0) {
+      const first = [...sourcesRemaining][0];
+      sourcesRemaining.delete(first);
+      const group = [first];
+
+      // Find all sources that are explicitly tied to this one
+      for (const other of [...sourcesRemaining]) {
+        const key = `${first}:${other}`;
+        if (comparedPairs.has(key)) {
+          // They were compared - check if tied (no edge means preference was 0)
+          const hasEdge = graph.get(first)?.has(other) || graph.get(other)?.has(first);
+          if (!hasEdge) {
+            group.push(other);
+            sourcesRemaining.delete(other);
+          }
+        }
+      }
+
+      tiedGroups.push(group);
+    }
+
+    // Sources that weren't compared to each other go to unranked
+    // Unless there's only one group, then they can be ranked
+    if (tiedGroups.length === 1) {
+      // All sources are either explicitly tied or form a single group
+      const group = tiedGroups[0];
+      group.sort((a, b) => (movieMap.get(a)?.title ?? '').localeCompare(movieMap.get(b)?.title ?? ''));
+      for (const id of group) {
+        ranked.push({
+          movieId: id,
+          title: movieMap.get(id)!.title,
+          rank: currentRank,
+        });
+        remaining.delete(id);
+        // Decrease in-degree of neighbors
+        for (const neighbor of graph.get(id) ?? []) {
+          if (remaining.has(neighbor)) {
+            componentInDegree.set(neighbor, componentInDegree.get(neighbor)! - 1);
+          }
+        }
+      }
+      currentRank++;
+    } else {
+      // Multiple unconnected groups at same level - they can't be ordered
+      // Put them all at the same rank
+      for (const group of tiedGroups) {
+        group.sort((a, b) => (movieMap.get(a)?.title ?? '').localeCompare(movieMap.get(b)?.title ?? ''));
+        for (const id of group) {
+          ranked.push({
+            movieId: id,
+            title: movieMap.get(id)!.title,
+            rank: currentRank,
+          });
+          remaining.delete(id);
+          for (const neighbor of graph.get(id) ?? []) {
+            if (remaining.has(neighbor)) {
+              componentInDegree.set(neighbor, componentInDegree.get(neighbor)! - 1);
+            }
+          }
+        }
+      }
+      currentRank++;
+    }
+  }
+
+  // Post-process: merge ranks for explicitly tied movies
+  // If A and B have preference = 0 (explicit tie), they should have the same rank
+  // Use the better (lower) rank for both
+  const explicitTies = new Map<number, Set<number>>();
+  for (const p of prefs) {
+    if (p.preference === 0) {
+      const a = p.movie_a_id;
+      const b = p.movie_b_id;
+      if (!explicitTies.has(a)) explicitTies.set(a, new Set([a]));
+      if (!explicitTies.has(b)) explicitTies.set(b, new Set([b]));
+      // Merge the tie groups
+      const groupA = explicitTies.get(a)!;
+      const groupB = explicitTies.get(b)!;
+      const merged = new Set([...groupA, ...groupB]);
+      for (const id of merged) {
+        explicitTies.set(id, merged);
+      }
+    }
+  }
+
+  // For each tie group, find the best (lowest) rank and assign it to all members
+  const processedGroups = new Set<Set<number>>();
+  for (const [, tieGroup] of explicitTies) {
+    if (processedGroups.has(tieGroup)) continue;
+    processedGroups.add(tieGroup);
+
+    // Find best rank among group members
+    let bestRank = Infinity;
+    for (const id of tieGroup) {
+      const r = ranked.find(r => r.movieId === id);
+      if (r && r.rank < bestRank) {
+        bestRank = r.rank;
+      }
+    }
+
+    // Assign best rank to all members
+    if (bestRank !== Infinity) {
+      for (const id of tieGroup) {
+        const r = ranked.find(r => r.movieId === id);
+        if (r) {
+          r.rank = bestRank;
+        }
+      }
+    }
+  }
+
+  // Re-sort ranked by rank, then alphabetically
+  ranked.sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    return a.title.localeCompare(b.title);
+  });
+
+  const unranked = unrankedIds.map(id => ({
+    movieId: id,
+    title: movieMap.get(id)!.title,
+  }));
+  unranked.sort((a, b) => a.title.localeCompare(b.title));
+
+  return { ranked, unranked };
 }
 
 // Get unwatched movies that user hasn't ranked yet
@@ -252,9 +501,11 @@ function wouldCreateCycle(
  * Compute aggregate movie rankings using Ranked Pairs (Tideman) method.
  * Only counts votes from users who have marked themselves as attending.
  *
- * Key ranking logic:
- * - If a user hasn't ranked a movie, they prefer all their ranked movies over it
- * - Unranked movies are tied with each other (no preference between them)
+ * Uses each user's computed rankings (with transitivity) to determine preferences:
+ * - If movie A has a better rank than B → vote for A
+ * - If same rank (explicit tie) → no vote
+ * - If A is ranked and B is unranked → vote for A
+ * - If both unranked → no vote
  *
  * 1. For each pair of movies, compute margin of victory (votes for winner - votes for loser)
  * 2. Sort pairs by margin (strongest victories first)
@@ -267,40 +518,36 @@ export function computeCondorcetRanking(): CondorcetResult[] {
 
   // Get attendees for next Wednesday
   const eventDate = getNextWednesday();
-  const attendeeSet = new Set(attendance.getAttendees(eventDate));
+  const attendees = attendance.getAttendees(eventDate);
 
-  // Get all preferences (only from attendees)
-  const allPrefs = queryAll<PairwisePreference>(
-    'SELECT * FROM pairwise_preferences'
-  ).filter(p => attendeeSet.has(p.user_id));
+  if (attendees.length === 0) return [];
 
-  // Build preference lookup: userId -> (movieA, movieB) -> preference
-  const userPrefs = new Map<string, Map<string, number>>();
-  for (const pref of allPrefs) {
-    if (!userPrefs.has(pref.user_id)) {
-      userPrefs.set(pref.user_id, new Map());
+  // Compute rankings for each attendee using the topological sort algorithm
+  // This handles transitivity and ties properly
+  const userRankings = new Map<string, { rankMap: Map<number, number>; unrankedSet: Set<number> }>();
+
+  for (const attendeeId of attendees) {
+    const { ranked, unranked } = computeRankings(attendeeId);
+
+    // Build a map from movieId -> rank for quick lookup
+    const rankMap = new Map<number, number>();
+    for (const r of ranked) {
+      rankMap.set(r.movieId, r.rank);
     }
-    const key = `${pref.movie_a_id}:${pref.movie_b_id}`;
-    userPrefs.get(pref.user_id)!.set(key, pref.preference);
-  }
 
-  // Build set of ranked movies per user (movies that appear in any pairwise comparison)
-  const userRankedMovies = new Map<string, Set<number>>();
-  for (const pref of allPrefs) {
-    if (!userRankedMovies.has(pref.user_id)) {
-      userRankedMovies.set(pref.user_id, new Set());
-    }
-    userRankedMovies.get(pref.user_id)!.add(pref.movie_a_id);
-    userRankedMovies.get(pref.user_id)!.add(pref.movie_b_id);
+    // Build set of unranked movie IDs
+    const unrankedSet = new Set(unranked.map(u => u.movieId));
+
+    userRankings.set(attendeeId, { rankMap, unrankedSet });
   }
 
   // Count how many attendees have ranked each movie
   const rankedByCounts = new Map<number, number>();
   for (const movie of unwatchedMovies) {
     let count = 0;
-    for (const attendeeId of attendeeSet) {
-      const rankedSet = userRankedMovies.get(attendeeId);
-      if (rankedSet?.has(movie.id)) {
+    for (const attendeeId of attendees) {
+      const userRanking = userRankings.get(attendeeId);
+      if (userRanking?.rankMap.has(movie.id)) {
         count++;
       }
     }
@@ -315,7 +562,7 @@ export function computeCondorcetRanking(): CondorcetResult[] {
     tieCount.set(id, 0);
   }
 
-  // Calculate margins for all pairs
+  // Calculate margins for all pairs using computed rankings
   for (let i = 0; i < movieIds.length; i++) {
     for (let j = i + 1; j < movieIds.length; j++) {
       const movieA = movieIds[i];
@@ -324,40 +571,34 @@ export function computeCondorcetRanking(): CondorcetResult[] {
       let votesForA = 0;
       let votesForB = 0;
 
-      // Check each attendee's preference
-      for (const attendeeId of attendeeSet) {
-        const prefMap = userPrefs.get(attendeeId);
-        const rankedSet = userRankedMovies.get(attendeeId);
+      // Check each attendee's preference based on their computed ranking
+      for (const attendeeId of attendees) {
+        const userRanking = userRankings.get(attendeeId);
+        if (!userRanking) continue;
 
-        const rankedA = rankedSet?.has(movieA) ?? false;
-        const rankedB = rankedSet?.has(movieB) ?? false;
+        const { rankMap } = userRanking;
 
-        // If user has explicit pairwise preference, use it
-        if (prefMap) {
-          const keyAB = `${movieA}:${movieB}`;
-          const keyBA = `${movieB}:${movieA}`;
+        const rankA = rankMap.get(movieA);
+        const rankB = rankMap.get(movieB);
 
-          if (prefMap.has(keyAB)) {
-            const pref = prefMap.get(keyAB)!;
-            if (pref > 0) votesForA++;
-            else if (pref < 0) votesForB++;
-            continue;
-          } else if (prefMap.has(keyBA)) {
-            const pref = prefMap.get(keyBA)!;
-            if (pref > 0) votesForB++;
-            else if (pref < 0) votesForA++;
-            continue;
+        if (rankA !== undefined && rankB !== undefined) {
+          // Both movies are ranked - compare ranks (lower rank = better)
+          if (rankA < rankB) {
+            votesForA++;
+          } else if (rankB < rankA) {
+            votesForB++;
           }
-        }
-
-        // No explicit preference - use implicit preference from ranking status
-        // If user ranked one movie but not the other, they prefer the ranked one
-        if (rankedA && !rankedB) {
+          // If rankA === rankB, it's a tie - no vote
+        } else if (rankA !== undefined && rankB === undefined) {
+          // A is ranked, B is either unranked or not compared at all
+          // Prefer the ranked movie
           votesForA++;
-        } else if (rankedB && !rankedA) {
+        } else if (rankB !== undefined && rankA === undefined) {
+          // B is ranked, A is either unranked or not compared at all
           votesForB++;
         }
-        // If user ranked both (but no explicit preference) or neither, no vote
+        // If both are undefined (neither ranked nor in unranked list), no vote
+        // If both are in unranked list, no vote (can't determine preference)
       }
 
       if (votesForA > votesForB) {
@@ -674,7 +915,7 @@ function formatCondorcetAsciiTable(titles: string[], matrix: number[][]): string
  * Compute the Condorcet pairwise comparison matrix.
  * matrix[i][j] = number of voters who prefer movie i over movie j
  * Only counts votes from attendees.
- * If a user ranked movie i but not j, they prefer i over j.
+ * Uses each user's computed rankings (with transitivity) to determine preferences.
  */
 export function computeCondorcetMatrix(): CondorcetMatrix {
   const unwatchedMovies = movies.getUnwatched();
@@ -688,34 +929,29 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
 
   // Get attendees for next Wednesday
   const eventDate = getNextWednesday();
-  const attendeeSet = new Set(attendance.getAttendees(eventDate));
+  const attendees = attendance.getAttendees(eventDate);
 
   // Initialize matrix with zeros
   const matrix: number[][] = Array(n).fill(null).map(() => Array(n).fill(0));
 
-  // Get all preferences (only from attendees)
-  const allPrefs = queryAll<PairwisePreference>(
-    'SELECT * FROM pairwise_preferences'
-  ).filter(p => attendeeSet.has(p.user_id));
-
-  // Build user preference maps
-  const userPrefs = new Map<string, Map<string, number>>();
-  for (const pref of allPrefs) {
-    if (!userPrefs.has(pref.user_id)) {
-      userPrefs.set(pref.user_id, new Map());
-    }
-    const key = `${pref.movie_a_id}:${pref.movie_b_id}`;
-    userPrefs.get(pref.user_id)!.set(key, pref.preference);
+  if (attendees.length === 0) {
+    const asciiTable = formatCondorcetAsciiTable(movieTitles, matrix);
+    return { movies: movieTitles, matrix, asciiTable };
   }
 
-  // Build set of ranked movies per user
-  const userRankedMovies = new Map<string, Set<number>>();
-  for (const pref of allPrefs) {
-    if (!userRankedMovies.has(pref.user_id)) {
-      userRankedMovies.set(pref.user_id, new Set());
+  // Compute rankings for each attendee using the topological sort algorithm
+  const userRankings = new Map<string, Map<number, number>>();
+
+  for (const attendeeId of attendees) {
+    const { ranked } = computeRankings(attendeeId);
+
+    // Build a map from movieId -> rank for quick lookup
+    const rankMap = new Map<number, number>();
+    for (const r of ranked) {
+      rankMap.set(r.movieId, r.rank);
     }
-    userRankedMovies.get(pref.user_id)!.add(pref.movie_a_id);
-    userRankedMovies.get(pref.user_id)!.add(pref.movie_b_id);
+
+    userRankings.set(attendeeId, rankMap);
   }
 
   // Fill matrix by checking each pair for each attendee
@@ -726,36 +962,24 @@ export function computeCondorcetMatrix(): CondorcetMatrix {
       const movieA = movieIds[i];
       const movieB = movieIds[j];
 
-      for (const attendeeId of attendeeSet) {
-        const prefMap = userPrefs.get(attendeeId);
-        const rankedSet = userRankedMovies.get(attendeeId);
+      for (const attendeeId of attendees) {
+        const rankMap = userRankings.get(attendeeId);
+        if (!rankMap) continue;
 
-        const rankedA = rankedSet?.has(movieA) ?? false;
-        const rankedB = rankedSet?.has(movieB) ?? false;
+        const rankA = rankMap.get(movieA);
+        const rankB = rankMap.get(movieB);
 
-        // Check explicit preference first
-        let hasExplicitPref = false;
-        if (prefMap) {
-          const keyAB = `${movieA}:${movieB}`;
-          const keyBA = `${movieB}:${movieA}`;
-
-          if (prefMap.has(keyAB)) {
-            const pref = prefMap.get(keyAB)!;
-            if (pref > 0) matrix[i][j]++;
-            hasExplicitPref = true;
-          } else if (prefMap.has(keyBA)) {
-            const pref = prefMap.get(keyBA)!;
-            if (pref < 0) matrix[i][j]++;
-            hasExplicitPref = true;
-          }
-        }
-
-        // If no explicit preference, use implicit from ranking status
-        if (!hasExplicitPref) {
-          if (rankedA && !rankedB) {
+        if (rankA !== undefined && rankB !== undefined) {
+          // Both movies are ranked - compare ranks (lower rank = better)
+          if (rankA < rankB) {
             matrix[i][j]++;
           }
+          // If rankA === rankB (tie) or rankA > rankB, no vote for A over B
+        } else if (rankA !== undefined && rankB === undefined) {
+          // A is ranked, B is not - prefer A
+          matrix[i][j]++;
         }
+        // If both undefined or only B ranked, no vote for A over B
       }
     }
   }

@@ -82,29 +82,144 @@ function getExistingRankedOrder(userId: string, movieIds: number[]): number[] {
   const prefs = preferences.getForUser(userId);
   if (prefs.length === 0) return [];
 
-  // Build preference map
-  const prefMap = new Map<string, number>();
-  for (const p of prefs) {
-    prefMap.set(`${p.movie_a_id}:${p.movie_b_id}`, p.preference);
-  }
-
   // Get movies that have been compared (and are in the current movieIds list)
   const movieIdSet = new Set(movieIds);
-  const comparedMovies = new Set<number>();
+  const comparedMovies: number[] = [];
   for (const p of prefs) {
-    if (movieIdSet.has(p.movie_a_id)) comparedMovies.add(p.movie_a_id);
-    if (movieIdSet.has(p.movie_b_id)) comparedMovies.add(p.movie_b_id);
+    if (movieIdSet.has(p.movie_a_id) && !comparedMovies.includes(p.movie_a_id)) {
+      comparedMovies.push(p.movie_a_id);
+    }
+    if (movieIdSet.has(p.movie_b_id) && !comparedMovies.includes(p.movie_b_id)) {
+      comparedMovies.push(p.movie_b_id);
+    }
   }
 
-  const compare = (a: number, b: number): number => {
-    const key1 = `${a}:${b}`;
-    const key2 = `${b}:${a}`;
-    if (prefMap.has(key1)) return -prefMap.get(key1)!;
-    if (prefMap.has(key2)) return prefMap.get(key2)!;
-    return 0;
-  };
+  if (comparedMovies.length === 0) return [];
 
-  return [...comparedMovies].sort(compare);
+  // Build directed graph: edge from A to B means A is preferred over B
+  const graph = new Map<number, Set<number>>();
+  const inDegree = new Map<number, number>();
+
+  for (const id of comparedMovies) {
+    graph.set(id, new Set());
+    inDegree.set(id, 0);
+  }
+
+  // Add edges based on preferences
+  for (const p of prefs) {
+    const a = p.movie_a_id;
+    const b = p.movie_b_id;
+
+    // Skip if either movie is not in our list
+    if (!graph.has(a) || !graph.has(b)) continue;
+
+    if (p.preference > 0) {
+      // A preferred over B: edge A -> B
+      if (!graph.get(a)!.has(b)) {
+        graph.get(a)!.add(b);
+        inDegree.set(b, inDegree.get(b)! + 1);
+      }
+    } else if (p.preference < 0) {
+      // B preferred over A: edge B -> A
+      if (!graph.get(b)!.has(a)) {
+        graph.get(b)!.add(a);
+        inDegree.set(a, inDegree.get(a)! + 1);
+      }
+    }
+    // preference === 0: no edge (explicit tie)
+  }
+
+  // Build undirected comparison graph for connectivity (includes ties)
+  const comparisonGraph = new Map<number, Set<number>>();
+  for (const id of comparedMovies) {
+    comparisonGraph.set(id, new Set());
+  }
+  for (const p of prefs) {
+    const a = p.movie_a_id;
+    const b = p.movie_b_id;
+    if (comparisonGraph.has(a) && comparisonGraph.has(b)) {
+      comparisonGraph.get(a)!.add(b);
+      comparisonGraph.get(b)!.add(a);
+    }
+  }
+
+  // Find the largest connected component using comparison graph
+  const visited = new Set<number>();
+  const components: number[][] = [];
+
+  function dfs(start: number): number[] {
+    const component: number[] = [];
+    const stack = [start];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      if (visited.has(node)) continue;
+      visited.add(node);
+      component.push(node);
+      for (const neighbor of comparisonGraph.get(node) ?? []) {
+        if (!visited.has(neighbor)) stack.push(neighbor);
+      }
+    }
+    return component;
+  }
+
+  for (const id of comparedMovies) {
+    if (!visited.has(id)) {
+      components.push(dfs(id));
+    }
+  }
+
+  // Use the largest component for ranking
+  components.sort((a, b) => b.length - a.length);
+  const mainComponent = new Set(components[0] ?? []);
+
+  // Topological sort the main component
+  const result: number[] = [];
+  const remaining = new Set(mainComponent);
+
+  // Recalculate in-degrees for main component
+  const componentInDegree = new Map<number, number>();
+  for (const id of mainComponent) {
+    componentInDegree.set(id, 0);
+  }
+  for (const [from, tos] of graph) {
+    if (!mainComponent.has(from)) continue;
+    for (const to of tos) {
+      if (mainComponent.has(to)) {
+        componentInDegree.set(to, componentInDegree.get(to)! + 1);
+      }
+    }
+  }
+
+  while (remaining.size > 0) {
+    // Find all nodes with in-degree 0
+    const sources: number[] = [];
+    for (const id of remaining) {
+      if (componentInDegree.get(id) === 0) {
+        sources.push(id);
+      }
+    }
+
+    if (sources.length === 0) {
+      // Cycle - skip remaining
+      break;
+    }
+
+    // Add all sources at this level (they may be tied)
+    // Sort by movie ID for consistency
+    sources.sort((a, b) => a - b);
+
+    for (const id of sources) {
+      result.push(id);
+      remaining.delete(id);
+      for (const neighbor of graph.get(id) ?? []) {
+        if (remaining.has(neighbor)) {
+          componentInDegree.set(neighbor, componentInDegree.get(neighbor)! - 1);
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 export function getSession(userId: string): RankingSession | undefined {

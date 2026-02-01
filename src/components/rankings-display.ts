@@ -7,27 +7,47 @@ export const RankingsButtonIds = {
 } as const;
 
 export function buildUserRankingsEmbed(userId: string): EmbedBuilder {
-  const rankings = computeRankings(userId);
-  const unrankedMovies = getUnrankedMovies(userId);
+  const { ranked, unranked: partiallyRanked } = computeRankings(userId);
+  const neverCompared = getUnrankedMovies(userId);
 
-  if (rankings.length === 0) {
+  if (ranked.length === 0 && partiallyRanked.length === 0) {
     return new EmbedBuilder()
       .setTitle('📊 Your Rankings')
       .setDescription('You haven\'t ranked any movies yet.')
       .setColor(0x5865f2);
   }
 
-  const rankingsList = rankings
-    .map((r, i) => `**${i + 1}.** ${r.title}`)
-    .join('\n');
+  // Build rankings list with ties shown at same number
+  const lines: string[] = [];
+  let lastRank = 0;
+  for (const r of ranked) {
+    if (r.rank === lastRank) {
+      // Tied with previous - show same rank number
+      lines.push(`**${r.rank}.** ${r.title}`);
+    } else {
+      lines.push(`**${r.rank}.** ${r.title}`);
+      lastRank = r.rank;
+    }
+  }
 
-  const footer = unrankedMovies.length > 0
-    ? `${rankings.length} ranked · ${unrankedMovies.length} still to rank`
-    : `${rankings.length} movies ranked`;
+  let description = lines.join('\n');
+
+  // Add partially ranked section (movies compared but can't be ordered)
+  if (partiallyRanked.length > 0) {
+    description += '\n\n**Unranked:**\n';
+    description += partiallyRanked.map(m => `- ${m.title}`).join('\n');
+  }
+
+  const totalRanked = ranked.length;
+  const totalUnranked = partiallyRanked.length + neverCompared.length;
+
+  const footer = totalUnranked > 0
+    ? `${totalRanked} ranked · ${totalUnranked} still to rank`
+    : `${totalRanked} movies ranked`;
 
   return new EmbedBuilder()
     .setTitle('📊 Your Rankings')
-    .setDescription(rankingsList)
+    .setDescription(description)
     .setColor(0x5865f2)
     .setFooter({ text: footer });
 }

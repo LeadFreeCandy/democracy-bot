@@ -20,6 +20,13 @@ export function getDb(): Database {
   return db;
 }
 
+/**
+ * Set the database instance (for testing purposes only).
+ */
+export function setDb(database: Database): void {
+  db = database;
+}
+
 export async function initializeDatabase(): Promise<void> {
   const SQL = await initSqlJs();
 
