@@ -146,6 +146,13 @@ export const preferences = {
 
     return undefined;
   },
+
+  deleteForMovie(userId: string, movieId: number): void {
+    execute(
+      'DELETE FROM pairwise_preferences WHERE user_id = ? AND (movie_a_id = ? OR movie_b_id = ?)',
+      [userId, movieId, movieId]
+    );
+  },
 };
 
 export interface RankedMovie {
@@ -1262,4 +1269,82 @@ export function resetDatabase(): void {
 
 export function resetUserData(userId: string): void {
   execute('DELETE FROM pairwise_preferences WHERE user_id = ?', [userId]);
+}
+
+// Reminders tracking
+export const reminders = {
+  wasSent(eventDate: string, reminderType: string): boolean {
+    const result = queryOne<{ sent_at: number }>(
+      'SELECT sent_at FROM reminders_sent WHERE event_date = ? AND reminder_type = ?',
+      [eventDate, reminderType]
+    );
+    return !!result;
+  },
+
+  markSent(eventDate: string, reminderType: string): void {
+    const now = Date.now();
+    execute(
+      'INSERT OR REPLACE INTO reminders_sent (event_date, reminder_type, sent_at) VALUES (?, ?, ?)',
+      [eventDate, reminderType, now]
+    );
+  },
+
+  clearForDate(eventDate: string): void {
+    execute('DELETE FROM reminders_sent WHERE event_date = ?', [eventDate]);
+  },
+};
+
+/**
+ * Get users who are attending but haven't ranked all movies yet.
+ */
+export function getAttendeesWithUnrankedMovies(eventDate: string): string[] {
+  const attendees = attendance.getAttendees(eventDate);
+  const unwatchedMovies = movies.getUnwatched();
+  const unwatchedIds = new Set(unwatchedMovies.map(m => m.id));
+
+  const usersWithUnranked: string[] = [];
+  for (const userId of attendees) {
+    const userPrefs = queryAll<{ movie_a_id: number; movie_b_id: number }>(
+      'SELECT movie_a_id, movie_b_id FROM pairwise_preferences WHERE user_id = ?',
+      [userId]
+    );
+    const rankedIds = new Set<number>();
+    for (const p of userPrefs) {
+      if (unwatchedIds.has(p.movie_a_id)) rankedIds.add(p.movie_a_id);
+      if (unwatchedIds.has(p.movie_b_id)) rankedIds.add(p.movie_b_id);
+    }
+
+    // If they haven't ranked all unwatched movies
+    if (rankedIds.size < unwatchedIds.size) {
+      usersWithUnranked.push(userId);
+    }
+  }
+  return usersWithUnranked;
+}
+
+/**
+ * Get users who have submitted movies or voted but haven't marked attendance.
+ */
+export function getUsersWhoShouldMarkAttendance(eventDate: string): string[] {
+  // Get all users who have either submitted a movie or voted
+  const submitters = queryAll<{ submitted_by: string }>(
+    'SELECT DISTINCT submitted_by FROM movies WHERE watched = 0'
+  );
+  const voters = queryAll<{ user_id: string }>(
+    'SELECT DISTINCT user_id FROM pairwise_preferences'
+  );
+
+  const activeUsers = new Set<string>();
+  for (const s of submitters) activeUsers.add(s.submitted_by);
+  for (const v of voters) activeUsers.add(v.user_id);
+
+  // Get users who have already marked attendance (either way)
+  const usersWithAttendance = queryAll<{ user_id: string }>(
+    'SELECT user_id FROM attendance WHERE event_date = ?',
+    [eventDate]
+  );
+  const markedUsers = new Set(usersWithAttendance.map(u => u.user_id));
+
+  // Return users who are active but haven't marked attendance
+  return [...activeUsers].filter(userId => !markedUsers.has(userId));
 }

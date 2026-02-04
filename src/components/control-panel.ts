@@ -34,7 +34,7 @@ export const ButtonIds = {
   SUBMIT_MOVIE: 'submit_movie',
   RANK_MOVIES: 'rank_movies',
   MY_RANKINGS: 'my_rankings',
-  EDIT: 'edit',
+  ADMIN: 'admin',
 } as const;
 
 export function buildQueueEmbed(includeImage: boolean = false): EmbedBuilder {
@@ -90,8 +90,8 @@ export function buildControlPanelButtons(): ActionRowBuilder<ButtonBuilder>[] {
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('📊'),
     new ButtonBuilder()
-      .setCustomId(ButtonIds.EDIT)
-      .setLabel('Edit')
+      .setCustomId(ButtonIds.ADMIN)
+      .setLabel('Admin')
       .setStyle(ButtonStyle.Secondary)
       .setEmoji('⚙️'),
   );

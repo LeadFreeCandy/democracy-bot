@@ -19,8 +19,7 @@ export function buildComparisonEmbed(
   movieATitle: string,
   movieBTitle: string
 ): EmbedBuilder {
-  const totalComparisons = estimateTotalComparisons(session);
-  const currentComparison = session.comparisonCount + 1;
+  const remainingComparisons = estimateRemainingComparisons(session);
   const moviesRemaining = session.pendingMovies.length + 1;
 
   return new EmbedBuilder()
@@ -29,7 +28,7 @@ export function buildComparisonEmbed(
       `**Which do you prefer?**\n\n` +
       `> **A.** ${movieATitle}\n` +
       `> **B.** ${movieBTitle}\n\n` +
-      `Comparison ${currentComparison} of ~${totalComparisons} · ${moviesRemaining} movie${moviesRemaining === 1 ? '' : 's'} left`
+      `~${remainingComparisons} comparison${remainingComparisons === 1 ? '' : 's'} remaining · ${moviesRemaining} movie${moviesRemaining === 1 ? '' : 's'} left`
     )
     .setColor(0x5865f2);
 }
@@ -124,12 +123,18 @@ function truncateLabel(label: string, maxLength: number = 80): string {
   return label.slice(0, maxLength - 3) + '...';
 }
 
-function estimateTotalComparisons(session: RankingSession): number {
-  const pendingCount = session.pendingMovies.length + 1;
+function estimateRemainingComparisons(session: RankingSession): number {
+  // Estimate comparisons remaining for current movie being inserted
   const currentListSize = session.sortedList.length;
-  let total = 0;
+  const currentSearchSpace = session.high - session.low;
+  const comparisonsForCurrentMovie = currentSearchSpace > 0 ? Math.ceil(Math.log2(currentSearchSpace)) : 0;
+
+  // Estimate comparisons for pending movies
+  let total = comparisonsForCurrentMovie;
+  const pendingCount = session.pendingMovies.length;
   for (let i = 0; i < pendingCount; i++) {
-    total += Math.ceil(Math.log2(currentListSize + i + 1));
+    total += Math.ceil(Math.log2(currentListSize + i + 2)); // +2 because current movie will be inserted first
   }
+
   return Math.max(total, 1);
 }

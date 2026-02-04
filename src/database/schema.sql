@@ -41,3 +41,10 @@ CREATE TABLE IF NOT EXISTS attendance (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, event_date)
 );
+
+CREATE TABLE IF NOT EXISTS reminders_sent (
+    event_date TEXT NOT NULL,
+    reminder_type TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    PRIMARY KEY (event_date, reminder_type)
+);

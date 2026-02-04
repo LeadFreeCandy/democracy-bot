@@ -11,12 +11,11 @@ import { movies } from '../database/queries';
 export const EditButtonIds = {
   DELETE_MOVIE: 'edit_delete_movie',
   RESET_DB: 'edit_reset_db',
-  RESET_MY_DATA: 'edit_reset_my_data',
+  SEND_REMINDERS: 'edit_send_reminders',
   DUMP_DB: 'edit_dump_db',
   DUMP_REFRESH: 'edit_dump_refresh',
   BACK: 'edit_back',
   CONFIRM_RESET_DB: 'edit_confirm_reset_db',
-  CONFIRM_RESET_MY_DATA: 'edit_confirm_reset_my_data',
   CANCEL: 'edit_cancel',
 } as const;
 
@@ -26,8 +25,8 @@ export const EditSelectIds = {
 
 export function buildEditMenuEmbed(): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle('⚙️ Settings & Admin')
-    .setDescription('Manage movies, data, and view debug info.')
+    .setTitle('⚙️ Admin Panel')
+    .setDescription('Manage movies, send reminders, and export data.')
     .setColor(0x5865f2);
 }
 
@@ -39,10 +38,10 @@ export function buildEditMenuButtons(userId: string): ActionRowBuilder<ButtonBui
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🗑️'),
     new ButtonBuilder()
-      .setCustomId(`${EditButtonIds.RESET_MY_DATA}:${userId}`)
-      .setLabel('Reset My Data')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('🔄'),
+      .setCustomId(`${EditButtonIds.SEND_REMINDERS}:${userId}`)
+      .setLabel('Send Reminders')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('📢'),
   );
 
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -146,17 +145,6 @@ export function buildConfirmResetDbEmbed(): EmbedBuilder {
     .setColor(0xed4245);
 }
 
-export function buildConfirmResetMyDataEmbed(): EmbedBuilder {
-  return new EmbedBuilder()
-    .setTitle('Confirm Reset My Data')
-    .setDescription(
-      '**Are you sure you want to reset your data?**\n\n' +
-      'This will delete:\n' +
-      '- Your movie rankings\n\n' +
-      '**This cannot be undone!**'
-    )
-    .setColor(0xed4245);
-}
 
 export function buildConfirmButtons(confirmId: string, userId: string): ActionRowBuilder<ButtonBuilder>[] {
   return [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -178,12 +166,6 @@ export function buildConfirmResetDbMessage(userId: string) {
   };
 }
 
-export function buildConfirmResetMyDataMessage(userId: string) {
-  return {
-    embeds: [buildConfirmResetMyDataEmbed()],
-    components: buildConfirmButtons(EditButtonIds.CONFIRM_RESET_MY_DATA, userId),
-  };
-}
 
 export function buildSuccessEmbed(title: string, description: string): EmbedBuilder {
   return new EmbedBuilder()

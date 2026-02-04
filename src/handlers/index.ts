@@ -4,7 +4,9 @@ import { handleModalSubmit } from './modals';
 import { buildControlPanelMessage } from '../components/control-panel';
 import { buildAttendancePanelMessage } from '../components/attendance-panel';
 import { EditSelectIds, buildEditMenuMessage, buildSuccessMessage } from '../components/edit-menu';
-import { controlPanel, attendancePanel, deleteMovie, movies, getNextWednesday } from '../database/queries';
+import { RankingsSelectIds, buildUserRankingsMessage } from '../components/rankings-display';
+import { controlPanel, attendancePanel, deleteMovie, movies, getNextWednesday, preferences } from '../database/queries';
+import { createSession, deleteSession } from '../ranking/session';
 import { config } from '../config';
 
 const DELETE_DELAY_MS = 5000;
@@ -70,6 +72,41 @@ async function handleSelectMenu(
     await updateControlPanel(client);
     await interaction.update(buildSuccessMessage('Movie Deleted', `"${title}" has been removed.`));
     scheduleDelete(interaction.message as Message);
+  } else if (action === RankingsSelectIds.RERANK_MOVIE) {
+    const userId = interaction.user.id;
+    const movieId = parseInt(interaction.values[0]);
+    const movie = movies.getById(movieId);
+    const title = movie?.title ?? 'Unknown';
+
+    // Clear any existing ranking session
+    deleteSession(userId);
+
+    // Delete all preferences involving this movie for this user
+    preferences.deleteForMovie(userId, movieId);
+
+    // Create a new ranking session starting with this movie
+    const session = createSession(userId, movieId);
+
+    // No session or no comparisons needed (single movie or already placed)
+    if (!session || session.movieToInsert === 0) {
+      if (session) {
+        deleteSession(userId);
+      }
+      await interaction.update({
+        content: `Preferences for "${title}" have been cleared. Click **Rank Movies** to re-rank it.`,
+        embeds: [],
+        components: [],
+      });
+      return;
+    }
+
+    // Import comparison message builder
+    const { buildComparisonMessage } = await import('../components/comparison');
+
+    await interaction.update({
+      content: `Re-ranking "${title}"...`,
+      ...buildComparisonMessage(session),
+    });
   }
 }
 

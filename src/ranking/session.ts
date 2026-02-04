@@ -20,7 +20,7 @@ export interface RankingSession {
 
 const sessions = new Map<string, RankingSession>();
 
-export function createSession(userId: string): RankingSession | null {
+export function createSession(userId: string, startWithMovieId?: number): RankingSession | null {
   // Get all unwatched movies
   const unwatchedMovies = movies.getUnwatched();
   if (unwatchedMovies.length === 0) {
@@ -34,7 +34,53 @@ export function createSession(userId: string): RankingSession | null {
 
   // Movies not yet in the ranked list
   const rankedSet = new Set(existingRanked);
-  const unrankedMovies = movieIds.filter(id => !rankedSet.has(id));
+  let unrankedMovies = movieIds.filter(id => !rankedSet.has(id));
+
+  // If a specific movie was requested (for re-ranking), prioritize it
+  if (startWithMovieId !== undefined) {
+    // Remove the movie from existingRanked if it's there
+    const filteredRanked = existingRanked.filter(id => id !== startWithMovieId);
+    // Remove it from unranked if it's there
+    unrankedMovies = unrankedMovies.filter(id => id !== startWithMovieId);
+    // Put it at the front of unranked
+    unrankedMovies.unshift(startWithMovieId);
+
+    const session: RankingSession = {
+      userId,
+      movieToInsert: 0,
+      sortedList: filteredRanked,
+      pendingMovies: unrankedMovies,
+      low: 0,
+      high: 0,
+      currentMid: 0,
+      comparisonCount: 0,
+      moviesRankedThisSession: 0,
+      createdAt: Date.now(),
+    };
+
+    // If no movies to compare against, just add the movie
+    if (session.sortedList.length === 0 && session.pendingMovies.length > 0) {
+      const firstMovie = session.pendingMovies.shift()!;
+      session.sortedList = [firstMovie];
+      session.moviesRankedThisSession = 1;
+    }
+
+    // Set up comparison for the movie
+    if (session.pendingMovies.length > 0) {
+      const nextMovie = session.pendingMovies.shift()!;
+      session.movieToInsert = nextMovie;
+      session.low = 0;
+      session.high = session.sortedList.length;
+      session.currentMid = Math.floor((session.low + session.high) / 2);
+    } else {
+      // Only one movie, nothing to compare
+      sessions.set(userId, session);
+      return session;
+    }
+
+    sessions.set(userId, session);
+    return session;
+  }
 
   // If all movies are already ranked, nothing to do
   if (unrankedMovies.length === 0) {

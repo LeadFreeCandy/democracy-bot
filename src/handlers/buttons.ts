@@ -5,18 +5,20 @@ import {
   ComparisonButtonIds,
   buildComparisonMessage,
   buildCompletionMessage,
-  buildCancelledMessage,
 } from '../components/comparison';
 import {
   EditButtonIds,
   buildEditMenuMessage,
   buildDeleteMovieMessage,
   buildConfirmResetDbMessage,
-  buildConfirmResetMyDataMessage,
   buildSuccessMessage,
 } from '../components/edit-menu';
 import { buildSubmitMovieModal } from '../components/modals';
-import { RankingsButtonIds, buildUserRankingsMessage } from '../components/rankings-display';
+import {
+  RankingsButtonIds,
+  buildUserRankingsMessage,
+  buildConfirmClearRankingsMessage,
+} from '../components/rankings-display';
 import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday, formatFunFactsReport } from '../database/queries';
 import {
   createSession,
@@ -49,8 +51,8 @@ export async function handleButtonInteraction(
     case ButtonIds.MY_RANKINGS:
       await handleMyRankings(interaction);
       return;
-    case ButtonIds.EDIT:
-      await handleEdit(interaction);
+    case ButtonIds.ADMIN:
+      await handleAdmin(interaction);
       return;
   }
 
@@ -81,8 +83,8 @@ export async function handleButtonInteraction(
     case EditButtonIds.RESET_DB:
       await handleResetDbConfirm(interaction);
       return;
-    case EditButtonIds.RESET_MY_DATA:
-      await handleResetMyDataConfirm(interaction);
+    case EditButtonIds.SEND_REMINDERS:
+      await handleSendReminders(interaction, client);
       return;
     case EditButtonIds.DUMP_DB:
       await handleDumpDb(interaction);
@@ -92,9 +94,6 @@ export async function handleButtonInteraction(
       return;
     case EditButtonIds.CONFIRM_RESET_DB:
       await handleConfirmResetDb(interaction, client);
-      return;
-    case EditButtonIds.CONFIRM_RESET_MY_DATA:
-      await handleConfirmResetMyData(interaction);
       return;
     case EditButtonIds.BACK:
       await handleEditBack(interaction);
@@ -111,6 +110,15 @@ export async function handleButtonInteraction(
       return;
     case RankingsButtonIds.REFRESH:
       await handleRefreshRankings(interaction);
+      return;
+    case RankingsButtonIds.CLEAR_RANKINGS:
+      await handleClearRankingsConfirm(interaction);
+      return;
+    case RankingsButtonIds.CONFIRM_CLEAR:
+      await handleConfirmClearRankings(interaction);
+      return;
+    case RankingsButtonIds.CANCEL:
+      await handleRankingsCancel(interaction);
       return;
   }
 
@@ -139,15 +147,8 @@ async function handleSubmitMovie(interaction: ButtonInteraction): Promise<void> 
 async function handleRankMovies(interaction: ButtonInteraction, client: Client): Promise<void> {
   const userId = interaction.user.id;
 
-  // Check if user already has a session
-  const existingSession = getSession(userId);
-  if (existingSession) {
-    await interaction.reply({
-      content: 'You already have a ranking session open. Complete or cancel it first!',
-      ephemeral: true,
-    });
-    return;
-  }
+  // Clear any existing session and start fresh
+  deleteSession(userId);
 
   // Create session for ranking
   const session = createSession(userId);
@@ -183,6 +184,25 @@ async function handleMyRankings(interaction: ButtonInteraction): Promise<void> {
 }
 
 async function handleRefreshRankings(interaction: ButtonInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  await interaction.update(buildUserRankingsMessage(userId));
+}
+
+async function handleClearRankingsConfirm(interaction: ButtonInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  await interaction.update(buildConfirmClearRankingsMessage(userId));
+}
+
+async function handleConfirmClearRankings(interaction: ButtonInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  resetUserData(userId);
+  await interaction.update({
+    embeds: [buildSuccessMessage('Rankings Cleared', 'All your movie rankings have been deleted.').embeds![0]],
+    components: [],
+  });
+}
+
+async function handleRankingsCancel(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   await interaction.update(buildUserRankingsMessage(userId));
 }
@@ -283,7 +303,7 @@ async function handleDumpDbRefresh(interaction: ButtonInteraction): Promise<void
   }
 }
 
-async function handleEdit(interaction: ButtonInteraction): Promise<void> {
+async function handleAdmin(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   await interaction.reply({
     ...buildEditMenuMessage(userId),
@@ -318,21 +338,22 @@ async function handleResetDbConfirm(interaction: ButtonInteraction): Promise<voi
   await interaction.update(buildConfirmResetDbMessage(userId));
 }
 
-async function handleResetMyDataConfirm(interaction: ButtonInteraction): Promise<void> {
-  const userId = interaction.user.id;
-  await interaction.update(buildConfirmResetMyDataMessage(userId));
-}
-
 async function handleConfirmResetDb(interaction: ButtonInteraction, client: Client): Promise<void> {
   resetDatabase();
   await updateControlPanel(client);
   await interaction.update(buildSuccessMessage('Database Reset', 'All data has been deleted.'));
 }
 
-async function handleConfirmResetMyData(interaction: ButtonInteraction): Promise<void> {
-  const userId = interaction.user.id;
-  resetUserData(userId);
-  await interaction.update(buildSuccessMessage('Data Reset', 'Your rankings have been deleted.'));
+async function handleSendReminders(interaction: ButtonInteraction, client: Client): Promise<void> {
+  const { sendVoteReminder, sendAttendanceReminder } = await import('../scheduler/reminders');
+
+  await interaction.update({
+    embeds: [buildSuccessMessage('Sending Reminders', 'Sending vote and attendance reminders...').embeds![0]],
+    components: [],
+  });
+
+  await sendVoteReminder(client);
+  await sendAttendanceReminder(client);
 }
 
 async function handleEditBack(interaction: ButtonInteraction): Promise<void> {
@@ -341,10 +362,9 @@ async function handleEditBack(interaction: ButtonInteraction): Promise<void> {
 }
 
 async function handleEditCancel(interaction: ButtonInteraction): Promise<void> {
-  await interaction.update({
-    content: 'Menu closed.',
-    embeds: [],
-    components: [],
+  await interaction.deferUpdate();
+  await interaction.deleteReply().catch(() => {
+    // Message may already be deleted
   });
 }
 
@@ -378,5 +398,8 @@ async function handlePreference(
 async function handleCancel(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   deleteSession(userId);
-  await interaction.update(buildCancelledMessage());
+  await interaction.deferUpdate();
+  await interaction.deleteReply().catch(() => {
+    // Message may already be deleted
+  });
 }
