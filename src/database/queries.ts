@@ -999,6 +999,256 @@ export function dumpDatabase(): DatabaseDump {
   };
 }
 
+export interface FunFacts {
+  topRankedMovie: { title: string; wins: number; losses: number } | null;
+  mostUniversallyLoved: { title: string; supportRatio: number; votesFor: number; votesAgainst: number } | null;
+  mostControversial: { title: string; controversy: number; votesFor: number; votesAgainst: number } | null;
+  condorcetWinner: { title: string } | null;
+  mostLopsidedMatchup: { movieA: string; movieB: string; votesFor: number; votesAgainst: number } | null;
+  closestMatchup: { movieA: string; movieB: string; votesFor: number; votesAgainst: number; margin: number } | null;
+  mostActiveVoter: { oderId: string; comparisons: number } | null;
+  totalStats: { movies: number; comparisons: number; voters: number; attendees: number };
+  moviesBySubmitter: { oderId: string; count: number; titles: string[] }[];
+}
+
+/**
+ * Compute fun facts and interesting statistics about the voting data.
+ */
+export function computeFunFacts(): FunFacts {
+  const unwatchedMovies = movies.getUnwatched();
+  const allPrefs = queryAll<PairwisePreference>('SELECT * FROM pairwise_preferences');
+  const eventDate = getNextWednesday();
+  const attendees = attendance.getAttendees(eventDate);
+
+  // Total stats
+  const voterIds = new Set(allPrefs.map(p => p.user_id));
+  const totalStats = {
+    movies: unwatchedMovies.length,
+    comparisons: allPrefs.length,
+    voters: voterIds.size,
+    attendees: attendees.length,
+  };
+
+  // Get the Condorcet ranking for top movie
+  const condorcetResults = computeCondorcetRanking();
+  const topRankedMovie = condorcetResults.length > 0
+    ? { title: condorcetResults[0].title, wins: condorcetResults[0].wins, losses: condorcetResults[0].losses }
+    : null;
+
+  // Check for Condorcet winner (beats all others head-to-head)
+  const condorcetWinner = condorcetResults.length > 0 && condorcetResults[0].losses === 0 && condorcetResults[0].wins > 0
+    ? { title: condorcetResults[0].title }
+    : null;
+
+  // Compute the matrix to analyze matchups
+  const matrixData = computeCondorcetMatrix();
+  const { movies: movieTitles, matrix } = matrixData;
+  const n = movieTitles.length;
+
+  // Most universally loved: highest (votesFor - votesAgainst) / total comparisons
+  // Most controversial: highest min(votesFor, votesAgainst) (lots of disagreement)
+  let mostUniversallyLoved: FunFacts['mostUniversallyLoved'] = null;
+  let mostControversial: FunFacts['mostControversial'] = null;
+  let bestSupportRatio = -Infinity;
+  let highestControversy = -1;
+
+  for (let i = 0; i < n; i++) {
+    let votesFor = 0;
+    let votesAgainst = 0;
+    for (let j = 0; j < n; j++) {
+      if (i !== j) {
+        votesFor += matrix[i][j];
+        votesAgainst += matrix[j][i];
+      }
+    }
+    const totalVotes = votesFor + votesAgainst;
+    if (totalVotes > 0) {
+      const supportRatio = (votesFor - votesAgainst) / totalVotes;
+      if (supportRatio > bestSupportRatio) {
+        bestSupportRatio = supportRatio;
+        mostUniversallyLoved = { title: movieTitles[i], supportRatio, votesFor, votesAgainst };
+      }
+
+      // Controversy = how evenly split the votes are (min of for/against)
+      const controversy = Math.min(votesFor, votesAgainst);
+      if (controversy > highestControversy) {
+        highestControversy = controversy;
+        mostControversial = { title: movieTitles[i], controversy, votesFor, votesAgainst };
+      }
+    }
+  }
+
+  // Most lopsided matchup (highest margin) and closest matchup
+  let mostLopsidedMatchup: FunFacts['mostLopsidedMatchup'] = null;
+  let closestMatchup: FunFacts['closestMatchup'] = null;
+  let highestMargin = -1;
+  let lowestNonZeroMargin = Infinity;
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const votesForI = matrix[i][j];
+      const votesForJ = matrix[j][i];
+      const totalVotes = votesForI + votesForJ;
+      if (totalVotes === 0) continue;
+
+      const margin = Math.abs(votesForI - votesForJ);
+
+      if (margin > highestMargin) {
+        highestMargin = margin;
+        if (votesForI >= votesForJ) {
+          mostLopsidedMatchup = { movieA: movieTitles[i], movieB: movieTitles[j], votesFor: votesForI, votesAgainst: votesForJ };
+        } else {
+          mostLopsidedMatchup = { movieA: movieTitles[j], movieB: movieTitles[i], votesFor: votesForJ, votesAgainst: votesForI };
+        }
+      }
+
+      if (margin < lowestNonZeroMargin && totalVotes > 0) {
+        lowestNonZeroMargin = margin;
+        if (votesForI >= votesForJ) {
+          closestMatchup = { movieA: movieTitles[i], movieB: movieTitles[j], votesFor: votesForI, votesAgainst: votesForJ, margin };
+        } else {
+          closestMatchup = { movieA: movieTitles[j], movieB: movieTitles[i], votesFor: votesForJ, votesAgainst: votesForI, margin };
+        }
+      }
+    }
+  }
+
+  // Most active voter
+  const voterComparisons = new Map<string, number>();
+  for (const pref of allPrefs) {
+    voterComparisons.set(pref.user_id, (voterComparisons.get(pref.user_id) ?? 0) + 1);
+  }
+  let mostActiveVoter: FunFacts['mostActiveVoter'] = null;
+  let maxComparisons = 0;
+  for (const [oderId, count] of voterComparisons) {
+    if (count > maxComparisons) {
+      maxComparisons = count;
+      mostActiveVoter = { oderId, comparisons: count };
+    }
+  }
+
+  // Movies by submitter
+  const submitterMovies = new Map<string, string[]>();
+  for (const movie of unwatchedMovies) {
+    const existing = submitterMovies.get(movie.submitted_by) ?? [];
+    existing.push(movie.title);
+    submitterMovies.set(movie.submitted_by, existing);
+  }
+  const moviesBySubmitter = Array.from(submitterMovies.entries())
+    .map(([oderId, titles]) => ({ oderId, count: titles.length, titles }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    topRankedMovie,
+    mostUniversallyLoved,
+    mostControversial,
+    condorcetWinner,
+    mostLopsidedMatchup,
+    closestMatchup,
+    mostActiveVoter,
+    totalStats,
+    moviesBySubmitter,
+  };
+}
+
+/**
+ * Format fun facts as a readable text report.
+ */
+export function formatFunFactsReport(): string {
+  const facts = computeFunFacts();
+  const lines: string[] = [];
+
+  lines.push('='.repeat(50));
+  lines.push('           MOVIE NIGHT FUN FACTS');
+  lines.push('='.repeat(50));
+  lines.push('');
+
+  // Overview stats
+  lines.push('OVERVIEW');
+  lines.push('-'.repeat(30));
+  lines.push(`Movies in queue: ${facts.totalStats.movies}`);
+  lines.push(`Total comparisons made: ${facts.totalStats.comparisons}`);
+  lines.push(`Unique voters: ${facts.totalStats.voters}`);
+  lines.push(`Attendees for next movie night: ${facts.totalStats.attendees}`);
+  lines.push('');
+
+  // Top ranked movie
+  if (facts.topRankedMovie) {
+    lines.push('TOP RANKED MOVIE');
+    lines.push('-'.repeat(30));
+    lines.push(`"${facts.topRankedMovie.title}"`);
+    lines.push(`  Wins: ${facts.topRankedMovie.wins} | Losses: ${facts.topRankedMovie.losses}`);
+    if (facts.condorcetWinner) {
+      lines.push(`  ** CONDORCET WINNER - Beats all other movies head-to-head! **`);
+    }
+    lines.push('');
+  }
+
+  // Most universally loved
+  if (facts.mostUniversallyLoved) {
+    lines.push('MOST UNIVERSALLY LOVED');
+    lines.push('-'.repeat(30));
+    lines.push(`"${facts.mostUniversallyLoved.title}"`);
+    lines.push(`  Votes for: ${facts.mostUniversallyLoved.votesFor} | Against: ${facts.mostUniversallyLoved.votesAgainst}`);
+    const pct = ((facts.mostUniversallyLoved.supportRatio + 1) / 2 * 100).toFixed(0);
+    lines.push(`  Support ratio: ${pct}% positive`);
+    lines.push('');
+  }
+
+  // Most controversial
+  if (facts.mostControversial) {
+    lines.push('MOST CONTROVERSIAL');
+    lines.push('-'.repeat(30));
+    lines.push(`"${facts.mostControversial.title}"`);
+    lines.push(`  Votes for: ${facts.mostControversial.votesFor} | Against: ${facts.mostControversial.votesAgainst}`);
+    lines.push(`  (People are evenly split on this one!)`);
+    lines.push('');
+  }
+
+  // Matchups
+  if (facts.mostLopsidedMatchup) {
+    lines.push('MOST ONE-SIDED MATCHUP');
+    lines.push('-'.repeat(30));
+    lines.push(`"${facts.mostLopsidedMatchup.movieA}" vs "${facts.mostLopsidedMatchup.movieB}"`);
+    lines.push(`  ${facts.mostLopsidedMatchup.votesFor} - ${facts.mostLopsidedMatchup.votesAgainst}`);
+    lines.push('');
+  }
+
+  if (facts.closestMatchup) {
+    lines.push('CLOSEST MATCHUP');
+    lines.push('-'.repeat(30));
+    lines.push(`"${facts.closestMatchup.movieA}" vs "${facts.closestMatchup.movieB}"`);
+    lines.push(`  ${facts.closestMatchup.votesFor} - ${facts.closestMatchup.votesAgainst} (margin: ${facts.closestMatchup.margin})`);
+    lines.push('');
+  }
+
+  // Most active voter
+  if (facts.mostActiveVoter) {
+    lines.push('MOST ACTIVE VOTER');
+    lines.push('-'.repeat(30));
+    lines.push(`User: ${facts.mostActiveVoter.oderId}`);
+    lines.push(`  Total comparisons: ${facts.mostActiveVoter.comparisons}`);
+    lines.push('');
+  }
+
+  // Movies by submitter
+  if (facts.moviesBySubmitter.length > 0) {
+    lines.push('MOVIES BY SUBMITTER');
+    lines.push('-'.repeat(30));
+    for (const sub of facts.moviesBySubmitter) {
+      lines.push(`${sub.oderId}: ${sub.count} movie(s)`);
+      for (const title of sub.titles) {
+        lines.push(`  - ${title}`);
+      }
+    }
+    lines.push('');
+  }
+
+  lines.push('='.repeat(50));
+
+  return lines.join('\n');
+}
+
 // Admin functions
 export function deleteMovie(movieId: number): void {
   execute('DELETE FROM pairwise_preferences WHERE movie_a_id = ? OR movie_b_id = ?', [movieId, movieId]);

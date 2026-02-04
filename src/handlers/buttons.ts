@@ -17,7 +17,7 @@ import {
 } from '../components/edit-menu';
 import { buildSubmitMovieModal } from '../components/modals';
 import { RankingsButtonIds, buildUserRankingsMessage } from '../components/rankings-display';
-import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday } from '../database/queries';
+import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday, formatFunFactsReport } from '../database/queries';
 import {
   createSession,
   getSession,
@@ -201,6 +201,7 @@ async function handleDumpDb(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   const dump = dumpDatabase();
   const asciiTable = dump.condorcet_matrix.asciiTable;
+  const funFactsReport = formatFunFactsReport();
 
   // Create JSON without the asciiTable (since it's shown separately)
   const jsonDump = {
@@ -216,20 +217,29 @@ async function handleDumpDb(interaction: ButtonInteraction): Promise<void> {
   const tableBlock = '**Condorcet Matrix:**\n```\n' + asciiTable + '\n```\n';
   const buttons = buildDumpDbButtons(userId);
 
+  // Always include fun facts as a file attachment
+  const funFactsBuffer = Buffer.from(funFactsReport, 'utf-8');
+  const files = [{
+    attachment: funFactsBuffer,
+    name: 'fun-facts.txt',
+  }];
+
   if (tableBlock.length + json.length + 20 < 1900) {
     await interaction.reply({
       content: tableBlock + '\n**Database:**\n```json\n' + json + '\n```',
+      files,
       components: [buttons],
       ephemeral: true,
     });
   } else {
-    const buffer = Buffer.from(json, 'utf-8');
+    const dbBuffer = Buffer.from(json, 'utf-8');
+    files.push({
+      attachment: dbBuffer,
+      name: 'database-dump.json',
+    });
     await interaction.reply({
-      content: tableBlock + '\nDatabase dump attached:',
-      files: [{
-        attachment: buffer,
-        name: 'database-dump.json',
-      }],
+      content: tableBlock + '\nDatabase dump and fun facts attached:',
+      files,
       components: [buttons],
       ephemeral: true,
     });
@@ -240,6 +250,7 @@ async function handleDumpDbRefresh(interaction: ButtonInteraction): Promise<void
   const userId = interaction.user.id;
   const dump = dumpDatabase();
   const asciiTable = dump.condorcet_matrix.asciiTable;
+  const funFactsReport = formatFunFactsReport();
 
   const jsonDump = {
     ...dump,
@@ -253,19 +264,28 @@ async function handleDumpDbRefresh(interaction: ButtonInteraction): Promise<void
   const tableBlock = '**Condorcet Matrix:**\n```\n' + asciiTable + '\n```\n';
   const buttons = buildDumpDbButtons(userId);
 
+  // Always include fun facts as a file attachment
+  const funFactsBuffer = Buffer.from(funFactsReport, 'utf-8');
+  const files = [{
+    attachment: funFactsBuffer,
+    name: 'fun-facts.txt',
+  }];
+
   if (tableBlock.length + json.length + 20 < 1900) {
     await interaction.update({
       content: tableBlock + '\n**Database:**\n```json\n' + json + '\n```',
+      files,
       components: [buttons],
     });
   } else {
-    const buffer = Buffer.from(json, 'utf-8');
+    const dbBuffer = Buffer.from(json, 'utf-8');
+    files.push({
+      attachment: dbBuffer,
+      name: 'database-dump.json',
+    });
     await interaction.update({
-      content: tableBlock + '\nDatabase dump attached:',
-      files: [{
-        attachment: buffer,
-        name: 'database-dump.json',
-      }],
+      content: tableBlock + '\nDatabase dump and fun facts attached:',
+      files,
       components: [buttons],
     });
   }
