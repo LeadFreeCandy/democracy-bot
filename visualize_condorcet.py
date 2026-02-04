@@ -334,7 +334,11 @@ def create_loose_graph(movie_ids, movie_titles, matrix, output_path="condorcet_l
 
     margins = [e[2] for e in edge_data]
     norm = mcolors.Normalize(vmin=min(margins), vmax=max(margins))
-    cmap = plt.cm.RdYlGn
+    # Truncate magma to start from purple (skip the dark black region)
+    cmap = plt.cm.magma.resampled(256)
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        'magma_purple', cmap(np.linspace(0.25, 1.0, 256))
+    )
 
     # Discord dark theme background color
     DISCORD_BG = '#1a1a1e'
@@ -437,7 +441,11 @@ def create_ranked_graph(movie_ids, movie_titles, matrix, output_path="condorcet_
         pos[node_idx] = (x_offset, -rank_pos * 1.2)
 
     norm = mcolors.Normalize(vmin=min(edge_data), vmax=max(edge_data))
-    cmap = plt.cm.RdYlGn
+    # Truncate magma to start from purple (skip the dark black region)
+    cmap = plt.cm.magma.resampled(256)
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        'magma_purple', cmap(np.linspace(0.25, 1.0, 256))
+    )
 
     # Discord dark theme background color
     DISCORD_BG = '#1a1a1e'
