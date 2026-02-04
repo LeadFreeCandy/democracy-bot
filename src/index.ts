@@ -1,8 +1,9 @@
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import { config } from './config';
 import { initializeDatabase } from './database';
 import { handleInteraction, setupControlPanel } from './handlers';
 import { setupScheduler } from './scheduler/reminders';
+import { commands } from './commands';
 
 const client = new Client({
   intents: [
@@ -17,6 +18,18 @@ client.once('ready', async () => {
   // Initialize database
   await initializeDatabase();
   console.log('Database initialized');
+
+  // Register slash commands
+  const rest = new REST().setToken(config.discord.token);
+  try {
+    await rest.put(
+      Routes.applicationCommands(client.user!.id),
+      { body: commands.map(cmd => cmd.toJSON()) }
+    );
+    console.log('Slash commands registered');
+  } catch (error) {
+    console.error('Failed to register slash commands:', error);
+  }
 
   // Setup control panel
   await setupControlPanel(client);

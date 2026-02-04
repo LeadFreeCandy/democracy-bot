@@ -1,10 +1,11 @@
 import { Client, Interaction, Message, StringSelectMenuInteraction, TextChannel } from 'discord.js';
 import { handleButtonInteraction } from './buttons';
 import { handleModalSubmit } from './modals';
+import { handleCommand } from '../commands';
 import { buildControlPanelMessage } from '../components/control-panel';
 import { buildAttendancePanelMessage } from '../components/attendance-panel';
-import { EditSelectIds, buildEditMenuMessage, buildSuccessMessage } from '../components/edit-menu';
-import { RankingsSelectIds, buildUserRankingsMessage } from '../components/rankings-display';
+import { EditSelectIds, buildSuccessMessage } from '../components/edit-menu';
+import { RankingsSelectIds } from '../components/rankings-display';
 import { controlPanel, attendancePanel, deleteMovie, movies, getNextWednesday, preferences } from '../database/queries';
 import { createSession, deleteSession } from '../ranking/session';
 import { config } from '../config';
@@ -36,7 +37,9 @@ export async function handleInteraction(
   interaction: Interaction,
   client: Client
 ): Promise<void> {
-  if (interaction.isButton()) {
+  if (interaction.isChatInputCommand()) {
+    await handleCommand(interaction, client);
+  } else if (interaction.isButton()) {
     await handleButtonInteraction(interaction, client);
   } else if (interaction.isModalSubmit()) {
     await handleModalSubmit(interaction, client);
