@@ -296,10 +296,17 @@ def create_loose_graph(movie_ids, movie_titles, matrix, output_path="condorcet_l
     G = nx.DiGraph()
     n = len(movie_ids)
 
-    # Compute wins/losses for each movie using ranked pairs
-    ranking, locked = compute_ranked_pairs(movie_ids, movie_titles, matrix)
-    wins = {i: len(locked.get(i, [])) for i in range(n)}
-    losses = {i: sum(1 for w, losers in locked.items() if i in losers) for i in range(n)}
+    # Compute wins/losses from head-to-head matrix (not locked pairs)
+    # This matches what's shown in the graph edges
+    wins = {i: 0 for i in range(n)}
+    losses = {i: 0 for i in range(n)}
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                if matrix[i][j] > matrix[j][i]:
+                    wins[i] += 1
+                elif matrix[i][j] < matrix[j][i]:
+                    losses[i] += 1
 
     # Add nodes
     for i, title in enumerate(movie_titles):

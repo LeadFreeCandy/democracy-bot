@@ -388,8 +388,9 @@ async function handlePreference(
   const result = processChoice(session, choice);
 
   if (result.done) {
-    await updateControlPanel(client);
+    // Respond first to avoid interaction timeout, then update control panel
     await interaction.update(buildCompletionMessage(result.rankedCount ?? 0));
+    await updateControlPanel(client);
   } else {
     await interaction.update(buildComparisonMessage(session));
   }
