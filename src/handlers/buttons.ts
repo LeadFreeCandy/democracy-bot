@@ -224,26 +224,18 @@ async function handleDumpDb(interaction: ButtonInteraction): Promise<void> {
     name: 'fun-facts.txt',
   }];
 
-  if (tableBlock.length + json.length + 20 < 1900) {
-    await interaction.reply({
-      content: tableBlock + '\n**Database:**\n```json\n' + json + '\n```',
-      files,
-      components: [buttons],
-      ephemeral: true,
-    });
-  } else {
-    const dbBuffer = Buffer.from(json, 'utf-8');
-    files.push({
-      attachment: dbBuffer,
-      name: 'database-dump.json',
-    });
-    await interaction.reply({
-      content: tableBlock + '\nDatabase dump and fun facts attached:',
-      files,
-      components: [buttons],
-      ephemeral: true,
-    });
-  }
+  const dbBuffer = Buffer.from(json, 'utf-8');
+  const tbuffer = Buffer.from(tableBlock, 'utf-8');
+  files.push({
+    attachment: tbuffer,
+    name: 'table.txt',
+  });
+  await interaction.reply({
+    content: '\nDatabase dump and fun facts attached:',
+    files,
+    components: [buttons],
+    ephemeral: true,
+  });
 }
 
 async function handleDumpDbRefresh(interaction: ButtonInteraction): Promise<void> {
