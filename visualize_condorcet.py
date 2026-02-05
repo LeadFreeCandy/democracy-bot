@@ -351,7 +351,17 @@ def create_loose_graph(movie_ids, movie_titles, matrix, output_path="condorcet_l
     # Use spring layout with high repulsion for better separation
     pos = nx.spring_layout(G, k=3.0, iterations=200, seed=42, scale=2.5)
 
-    # Draw edges (no transparency)
+    # Draw nodes FIRST (so edges draw on top)
+    nx.draw_networkx_nodes(
+        G, pos, ax=ax,
+        node_color='#5865F2',  # Discord blurple
+        node_size=3500,
+        alpha=0.95,
+        edgecolors='#7289DA',
+        linewidths=2
+    )
+
+    # Draw edges on top of nodes with larger curves for clarity
     edges = G.edges(data=True)
     edge_colors = [cmap(norm(d['weight'])) for u, v, d in edges]
     edge_widths = [0.8 + 2.0 * norm(d['weight']) for u, v, d in edges]
@@ -361,21 +371,11 @@ def create_loose_graph(movie_ids, movie_titles, matrix, output_path="condorcet_l
         edge_color=edge_colors,
         width=edge_widths,
         arrows=True,
-        arrowsize=20,
-        connectionstyle="arc3,rad=0.15",
-        min_source_margin=30,
-        min_target_margin=30
-    )
-
-
-    # Draw nodes
-    nx.draw_networkx_nodes(
-        G, pos, ax=ax,
-        node_color='#5865F2',  # Discord blurple
-        node_size=3500,
-        alpha=0.95,
-        edgecolors='#7289DA',
-        linewidths=2
+        arrowsize=25,
+        arrowstyle='-|>',
+        connectionstyle="arc3,rad=0.2",
+        min_source_margin=35,
+        min_target_margin=35
     )
 
     # Draw movie name inside nodes
