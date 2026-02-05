@@ -19,14 +19,15 @@ client.once('ready', async () => {
   await initializeDatabase();
   console.log('Database initialized');
 
-  // Register slash commands
+  // Register slash commands to guild (instant) instead of global (up to 1 hour)
   const rest = new REST().setToken(config.discord.token);
+  const guildId = '1153426480487993445';
   try {
     await rest.put(
-      Routes.applicationCommands(client.user!.id),
+      Routes.applicationGuildCommands(client.user!.id, guildId),
       { body: commands.map(cmd => cmd.toJSON()) }
     );
-    console.log('Slash commands registered');
+    console.log(`Slash commands registered to guild ${guildId}`);
   } catch (error) {
     console.error('Failed to register slash commands:', error);
   }
