@@ -27,6 +27,7 @@ import {
 } from '../ranking/session';
 import { processChoice, Choice } from '../ranking/binary-insertion';
 import { updateControlPanel, updateAttendancePanel } from './index';
+import { syncWatchersRole } from '../roles/watchers';
 
 function parseButtonId(customId: string): { action: string; userId?: string } {
   const parts = customId.split(':');
@@ -326,6 +327,9 @@ async function handleAttendance(
   await interaction.deferUpdate();
   await updateAttendancePanel(client);
   await updateControlPanel(client);
+
+  // Sync watchers role
+  await syncWatchersRole(client);
 }
 
 async function handleDeleteMovieMenu(interaction: ButtonInteraction): Promise<void> {

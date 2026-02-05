@@ -4,11 +4,13 @@ import { initializeDatabase } from './database';
 import { handleInteraction, setupControlPanel } from './handlers';
 import { setupScheduler } from './scheduler/reminders';
 import { commands } from './commands';
+import { syncWatchersRole } from './roles/watchers';
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
   ],
 });
 
@@ -37,6 +39,9 @@ client.once('ready', async () => {
 
   // Setup scheduler
   setupScheduler(client);
+
+  // Sync watchers role with attendance list
+  await syncWatchersRole(client);
 
   console.log('Bot is ready!');
 });

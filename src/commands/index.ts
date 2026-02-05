@@ -6,6 +6,7 @@ import {
 } from 'discord.js';
 import { attendance, getNextWednesday } from '../database/queries';
 import { updateAttendancePanel } from '../handlers';
+import { syncWatchersRole } from '../roles/watchers';
 
 export const commands = [
   new SlashCommandBuilder()
@@ -43,6 +44,7 @@ export async function handleCommand(
 
     attendance.set(user.id, eventDate, true);
     await updateAttendancePanel(client);
+    await syncWatchersRole(client);
 
     await interaction.reply({
       content: `Added <@${user.id}> to the attendance list for ${eventDate}.`,
@@ -53,6 +55,7 @@ export async function handleCommand(
 
     attendance.set(user.id, eventDate, false);
     await updateAttendancePanel(client);
+    await syncWatchersRole(client);
 
     await interaction.reply({
       content: `Removed <@${user.id}> from the attendance list for ${eventDate}.`,
