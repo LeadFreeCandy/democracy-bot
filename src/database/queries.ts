@@ -468,41 +468,7 @@ export interface CondorcetResult {
   ties: number;          // Head-to-head ties
 }
 
-// Edge in ranked pairs graph
-interface RankedPair {
-  winner: number;  // movie id
-  loser: number;   // movie id
-  margin: number;  // votes for winner - votes for loser
-}
-
-/**
- * Check if adding an edge from 'from' to 'to' would create a cycle.
- * Uses DFS to check if 'to' can reach 'from' via existing locked edges.
- */
-function wouldCreateCycle(
-  locked: Map<number, Set<number>>,
-  from: number,
-  to: number
-): boolean {
-  // If adding from->to, check if to can already reach from
-  const visited = new Set<number>();
-  const stack = [to];
-
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    if (current === from) return true;
-    if (visited.has(current)) continue;
-    visited.add(current);
-
-    const neighbors = locked.get(current);
-    if (neighbors) {
-      for (const neighbor of neighbors) {
-        stack.push(neighbor);
-      }
-    }
-  }
-  return false;
-}
+import { rankedPairsElection } from '../lib/ranked-pairs';
 
 /**
  * Compute aggregate movie rankings using Ranked Pairs (Tideman) method.
@@ -562,14 +528,15 @@ export function computeCondorcetRanking(): CondorcetResult[] {
   }
 
   const movieIds = unwatchedMovies.map(m => m.id);
-  const pairs: RankedPair[] = [];
+
+  // Build pairwise vote matrix from computed rankings
+  const voteMatrix = new Map<string, number>();
   const tieCount = new Map<number, number>();
 
   for (const id of movieIds) {
     tieCount.set(id, 0);
   }
 
-  // Calculate margins for all pairs using computed rankings
   for (let i = 0; i < movieIds.length; i++) {
     for (let j = i + 1; j < movieIds.length; j++) {
       const movieA = movieIds[i];
@@ -578,143 +545,43 @@ export function computeCondorcetRanking(): CondorcetResult[] {
       let votesForA = 0;
       let votesForB = 0;
 
-      // Check each attendee's preference based on their computed ranking
       for (const attendeeId of attendees) {
         const userRanking = userRankings.get(attendeeId);
         if (!userRanking) continue;
 
         const { rankMap } = userRanking;
-
         const rankA = rankMap.get(movieA);
         const rankB = rankMap.get(movieB);
 
         if (rankA !== undefined && rankB !== undefined) {
-          // Both movies are ranked - compare ranks (lower rank = better)
-          if (rankA < rankB) {
-            votesForA++;
-          } else if (rankB < rankA) {
-            votesForB++;
-          }
-          // If rankA === rankB, it's a tie - no vote
+          if (rankA < rankB) votesForA++;
+          else if (rankB < rankA) votesForB++;
         } else if (rankA !== undefined && rankB === undefined) {
-          // A is ranked, B is either unranked or not compared at all
-          // Prefer the ranked movie
           votesForA++;
         } else if (rankB !== undefined && rankA === undefined) {
-          // B is ranked, A is either unranked or not compared at all
           votesForB++;
         }
-        // If both are undefined (neither ranked nor in unranked list), no vote
-        // If both are in unranked list, no vote (can't determine preference)
       }
 
-      if (votesForA > votesForB) {
-        pairs.push({ winner: movieA, loser: movieB, margin: votesForA - votesForB });
-      } else if (votesForB > votesForA) {
-        pairs.push({ winner: movieB, loser: movieA, margin: votesForB - votesForA });
-      } else {
-        // Tie - no edge added
+      voteMatrix.set(`${movieA}:${movieB}`, votesForA);
+      voteMatrix.set(`${movieB}:${movieA}`, votesForB);
+
+      if (votesForA === votesForB) {
         tieCount.set(movieA, tieCount.get(movieA)! + 1);
         tieCount.set(movieB, tieCount.get(movieB)! + 1);
       }
     }
   }
 
-  // Sort pairs by margin (highest first), then by rankedByCount as tiebreaker
-  pairs.sort((a, b) => {
-    if (b.margin !== a.margin) return b.margin - a.margin;
-    const aRanked = rankedByCounts.get(a.winner) ?? 0;
-    const bRanked = rankedByCounts.get(b.winner) ?? 0;
-    return bRanked - aRanked;
+  // Run Ranked Pairs election with rankedByCount tiebreaker
+  const { ranking, wins, losses } = rankedPairsElection(movieIds, voteMatrix, (a, b) => {
+    const rA = rankedByCounts.get(a) ?? 0;
+    const rB = rankedByCounts.get(b) ?? 0;
+    if (rB !== rA) return rB - rA;
+    const movieA = unwatchedMovies.find(m => m.id === a);
+    const movieB = unwatchedMovies.find(m => m.id === b);
+    return (movieA?.title ?? '').localeCompare(movieB?.title ?? '');
   });
-
-  // Lock in pairs that don't create cycles
-  const locked = new Map<number, Set<number>>();
-  for (const id of movieIds) {
-    locked.set(id, new Set());
-  }
-
-  for (const pair of pairs) {
-    if (!wouldCreateCycle(locked, pair.winner, pair.loser)) {
-      locked.get(pair.winner)!.add(pair.loser);
-    }
-  }
-
-  // Count wins/losses from locked graph
-  const wins = new Map<number, number>();
-  const losses = new Map<number, number>();
-  for (const id of movieIds) {
-    wins.set(id, 0);
-    losses.set(id, 0);
-  }
-
-  for (const [winner, losers] of locked) {
-    wins.set(winner, losers.size);
-    for (const loser of losers) {
-      losses.set(loser, losses.get(loser)! + 1);
-    }
-  }
-
-  // Topological sort to get final ranking
-  // Movies with no incoming edges (losses from locked pairs) rank higher
-  const inDegree = new Map<number, number>();
-  for (const id of movieIds) {
-    inDegree.set(id, 0);
-  }
-  for (const [_winner, losers] of locked) {
-    for (const loser of losers) {
-      inDegree.set(loser, inDegree.get(loser)! + 1);
-    }
-  }
-
-  const ranking: number[] = [];
-  const remaining = new Set(movieIds);
-
-  while (remaining.size > 0) {
-    // Find nodes with in-degree 0
-    const sources: number[] = [];
-    for (const id of remaining) {
-      if (inDegree.get(id) === 0) {
-        sources.push(id);
-      }
-    }
-
-    if (sources.length === 0) {
-      // Cycle detected (shouldn't happen with proper cycle detection)
-      // Just add remaining in rankedByCount order
-      const rest = [...remaining].sort((a, b) => {
-        const rA = rankedByCounts.get(a) ?? 0;
-        const rB = rankedByCounts.get(b) ?? 0;
-        return rB - rA;
-      });
-      ranking.push(...rest);
-      break;
-    }
-
-    // Sort sources by rankedByCount (tiebreaker)
-    sources.sort((a, b) => {
-      const rA = rankedByCounts.get(a) ?? 0;
-      const rB = rankedByCounts.get(b) ?? 0;
-      if (rB !== rA) return rB - rA;
-      // Final tiebreaker: alphabetical by title
-      const movieA = unwatchedMovies.find(m => m.id === a);
-      const movieB = unwatchedMovies.find(m => m.id === b);
-      return (movieA?.title ?? '').localeCompare(movieB?.title ?? '');
-    });
-
-    // Take first source, add to ranking
-    const next = sources[0];
-    ranking.push(next);
-    remaining.delete(next);
-
-    // Decrease in-degree of neighbors
-    const neighbors = locked.get(next);
-    if (neighbors) {
-      for (const neighbor of neighbors) {
-        inDegree.set(neighbor, inDegree.get(neighbor)! - 1);
-      }
-    }
-  }
 
   // Build results in ranking order
   const results: CondorcetResult[] = ranking.map(id => {
@@ -1270,6 +1137,42 @@ export function resetDatabase(): void {
 export function resetUserData(userId: string): void {
   execute('DELETE FROM pairwise_preferences WHERE user_id = ?', [userId]);
 }
+
+// Movie rating queries
+export interface MovieRating {
+  user_id: string;
+  movie_id: number;
+  score: number;
+  created_at: number;
+}
+
+export const ratings = {
+  record(userId: string, movieId: number, score: number): void {
+    const now = Date.now();
+    execute(
+      `INSERT INTO movie_ratings (user_id, movie_id, score, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, movie_id) DO UPDATE SET score = ?, created_at = ?`,
+      [userId, movieId, score, now, score, now]
+    );
+  },
+
+  getForMovie(movieId: number): MovieRating[] {
+    return queryAll<MovieRating>(
+      'SELECT * FROM movie_ratings WHERE movie_id = ? ORDER BY created_at ASC',
+      [movieId]
+    );
+  },
+
+  getAverage(movieId: number): number | undefined {
+    const result = queryOne<{ avg_score: number; count: number }>(
+      'SELECT AVG(score) as avg_score, COUNT(*) as count FROM movie_ratings WHERE movie_id = ?',
+      [movieId]
+    );
+    if (!result || result.count === 0) return undefined;
+    return result.avg_score;
+  },
+};
 
 // Reminders tracking
 export const reminders = {

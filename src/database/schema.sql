@@ -48,3 +48,12 @@ CREATE TABLE IF NOT EXISTS reminders_sent (
     sent_at INTEGER NOT NULL,
     PRIMARY KEY (event_date, reminder_type)
 );
+
+CREATE TABLE IF NOT EXISTS movie_ratings (
+    user_id TEXT NOT NULL,
+    movie_id INTEGER NOT NULL,
+    score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (movie_id) REFERENCES movies(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, movie_id)
+);

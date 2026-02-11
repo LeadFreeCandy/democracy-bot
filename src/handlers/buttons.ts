@@ -10,16 +10,18 @@ import {
   EditButtonIds,
   buildEditMenuMessage,
   buildDeleteMovieMessage,
+  buildMarkWatchedMessage,
   buildConfirmResetDbMessage,
   buildSuccessMessage,
 } from '../components/edit-menu';
+import { RatingButtonIds, buildRatingMessage } from '../components/rating';
 import { buildSubmitMovieModal } from '../components/modals';
 import {
   RankingsButtonIds,
   buildUserRankingsMessage,
   buildConfirmClearRankingsMessage,
 } from '../components/rankings-display';
-import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday, formatFunFactsReport } from '../database/queries';
+import { dumpDatabase, deleteMovie, resetDatabase, resetUserData, attendance, getNextWednesday, formatFunFactsReport, ratings, movies } from '../database/queries';
 import {
   createSession,
   getSession,
@@ -28,6 +30,7 @@ import {
 import { processChoice, Choice } from '../ranking/binary-insertion';
 import { updateControlPanel, updateAttendancePanel } from './index';
 import { syncWatchersRole } from '../roles/watchers';
+import { handleVoteButtonInteraction } from '../votes/handlers';
 
 function parseButtonId(customId: string): { action: string; userId?: string } {
   const parts = customId.split(':');
@@ -40,6 +43,12 @@ export async function handleButtonInteraction(
 ): Promise<void> {
   const { customId } = interaction;
   const { action, userId: buttonOwnerId } = parseButtonId(customId);
+
+  // Route vote_* buttons to vote handler
+  if (action.startsWith('vote_')) {
+    await handleVoteButtonInteraction(interaction, client);
+    return;
+  }
 
   // Control panel buttons (no owner check needed)
   switch (action) {
@@ -55,6 +64,12 @@ export async function handleButtonInteraction(
     case ButtonIds.ADMIN:
       await handleAdmin(interaction);
       return;
+  }
+
+  // Rating buttons (no owner check needed - anyone can rate)
+  if (action === RatingButtonIds.RATE_MOVIE) {
+    await handleRateMovie(interaction);
+    return;
   }
 
   // Attendance buttons (no owner check needed)
@@ -80,6 +95,9 @@ export async function handleButtonInteraction(
   switch (action) {
     case EditButtonIds.DELETE_MOVIE:
       await handleDeleteMovieMenu(interaction);
+      return;
+    case EditButtonIds.MARK_WATCHED:
+      await handleMarkWatchedMenu(interaction);
       return;
     case EditButtonIds.RESET_DB:
       await handleResetDbConfirm(interaction);
@@ -335,6 +353,25 @@ async function handleAttendance(
 async function handleDeleteMovieMenu(interaction: ButtonInteraction): Promise<void> {
   const userId = interaction.user.id;
   await interaction.update(buildDeleteMovieMessage(userId));
+}
+
+async function handleMarkWatchedMenu(interaction: ButtonInteraction): Promise<void> {
+  const userId = interaction.user.id;
+  await interaction.update(buildMarkWatchedMessage(userId));
+}
+
+async function handleRateMovie(interaction: ButtonInteraction): Promise<void> {
+  const parts = interaction.customId.split(':');
+  const movieId = parseInt(parts[1]);
+  const score = parseInt(parts[2]);
+  const userId = interaction.user.id;
+
+  ratings.record(userId, movieId, score);
+
+  const movie = movies.getById(movieId);
+  const title = movie?.title ?? 'Unknown';
+
+  await interaction.update(buildRatingMessage(movieId, title));
 }
 
 async function handleResetDbConfirm(interaction: ButtonInteraction): Promise<void> {

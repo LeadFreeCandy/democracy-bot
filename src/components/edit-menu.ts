@@ -10,6 +10,7 @@ import { movies } from '../database/queries';
 
 export const EditButtonIds = {
   DELETE_MOVIE: 'edit_delete_movie',
+  MARK_WATCHED: 'edit_mark_watched',
   RESET_DB: 'edit_reset_db',
   SEND_REMINDERS: 'edit_send_reminders',
   DUMP_DB: 'edit_dump_db',
@@ -21,6 +22,7 @@ export const EditButtonIds = {
 
 export const EditSelectIds = {
   DELETE_MOVIE_SELECT: 'edit_delete_movie_select',
+  MARK_WATCHED_SELECT: 'edit_mark_watched_select',
 } as const;
 
 export function buildEditMenuEmbed(): EmbedBuilder {
@@ -37,6 +39,11 @@ export function buildEditMenuButtons(userId: string): ActionRowBuilder<ButtonBui
       .setLabel('Delete Movie')
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🗑️'),
+    new ButtonBuilder()
+      .setCustomId(`${EditButtonIds.MARK_WATCHED}:${userId}`)
+      .setLabel('Mark as Watched')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✅'),
     new ButtonBuilder()
       .setCustomId(`${EditButtonIds.SEND_REMINDERS}:${userId}`)
       .setLabel('Send Reminders')
@@ -178,5 +185,41 @@ export function buildSuccessMessage(title: string, description: string) {
   return {
     embeds: [buildSuccessEmbed(title, description)],
     components: [],
+  };
+}
+
+// Mark as Watched select menu
+export function buildMarkWatchedMessage(userId: string) {
+  const unwatchedMovies = movies.getUnwatched();
+
+  if (unwatchedMovies.length === 0) {
+    return {
+      embeds: [new EmbedBuilder()
+        .setTitle('Mark as Watched')
+        .setDescription('No movies in the queue to mark as watched.')
+        .setColor(0x57f287)],
+      components: [buildDeleteMovieBackButton(userId)],
+    };
+  }
+
+  const options = unwatchedMovies.slice(0, 25).map(m =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(m.title.slice(0, 100))
+      .setValue(m.id.toString())
+  );
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${EditSelectIds.MARK_WATCHED_SELECT}:${userId}`)
+    .setPlaceholder('Select a movie to mark as watched')
+    .addOptions(options);
+
+  const selectRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+
+  return {
+    embeds: [new EmbedBuilder()
+      .setTitle('Mark as Watched')
+      .setDescription('Select a movie to mark as watched:')
+      .setColor(0x57f287)],
+    components: [selectRow, buildDeleteMovieBackButton(userId)],
   };
 }

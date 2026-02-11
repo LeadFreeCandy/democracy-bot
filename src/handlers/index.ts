@@ -5,6 +5,7 @@ import { handleCommand } from '../commands';
 import { buildControlPanelMessage } from '../components/control-panel';
 import { buildAttendancePanelMessage } from '../components/attendance-panel';
 import { EditSelectIds, buildSuccessMessage } from '../components/edit-menu';
+import { buildRatingMessage } from '../components/rating';
 import { RankingsSelectIds } from '../components/rankings-display';
 import { controlPanel, attendancePanel, deleteMovie, movies, getNextWednesday, preferences } from '../database/queries';
 import { createSession, deleteSession } from '../ranking/session';
@@ -66,7 +67,21 @@ async function handleSelectMenu(
     return;
   }
 
-  if (action === EditSelectIds.DELETE_MOVIE_SELECT) {
+  if (action === EditSelectIds.MARK_WATCHED_SELECT) {
+    const movieId = parseInt(interaction.values[0]);
+    const movie = movies.getById(movieId);
+    const title = movie?.title ?? 'Unknown';
+
+    movies.markWatched(movieId);
+    await updateControlPanel(client);
+    await interaction.update(buildSuccessMessage('Marked as Watched', `"${title}" has been marked as watched.`));
+
+    // Send rating message to the channel (public, non-ephemeral)
+    const channel = interaction.channel;
+    if (channel && channel.isTextBased()) {
+      await (channel as TextChannel).send(buildRatingMessage(movieId, title));
+    }
+  } else if (action === EditSelectIds.DELETE_MOVIE_SELECT) {
     const movieId = parseInt(interaction.values[0]);
     const movie = movies.getById(movieId);
     const title = movie?.title ?? 'Unknown';

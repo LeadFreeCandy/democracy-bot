@@ -1,6 +1,8 @@
 import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import { config } from './config';
 import { initializeDatabase } from './database';
+import { initializeVoteDatabase } from './votes/database';
+import { restoreVoteTimers } from './votes/scheduler';
 import { handleInteraction, setupControlPanel } from './handlers';
 import { setupScheduler } from './scheduler/reminders';
 import { commands } from './commands';
@@ -17,21 +19,29 @@ const client = new Client({
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
-  // Initialize database
+  // Initialize databases
   await initializeDatabase();
-  console.log('Database initialized');
+  console.log('Movie database initialized');
 
-  // Register slash commands to guild (instant) instead of global (up to 1 hour)
+  await initializeVoteDatabase();
+  console.log('Vote database initialized');
+
+  // Restore active vote timers
+  restoreVoteTimers(client);
+
+  // Register slash commands to guilds (instant) instead of global (up to 1 hour)
   const rest = new REST().setToken(config.discord.token);
-  const guildId = '1153426480487993445';
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(client.user!.id, guildId),
-      { body: commands.map(cmd => cmd.toJSON()) }
-    );
-    console.log(`Slash commands registered to guild ${guildId}`);
-  } catch (error) {
-    console.error('Failed to register slash commands:', error);
+  const guildIds = ['1153426480487993445', '1168648679339602001'];
+  for (const guildId of guildIds) {
+    try {
+      await rest.put(
+        Routes.applicationGuildCommands(client.user!.id, guildId),
+        { body: commands.map(cmd => cmd.toJSON()) }
+      );
+      console.log(`Slash commands registered to guild ${guildId}`);
+    } catch (error) {
+      console.error(`Failed to register slash commands to guild ${guildId}:`, error);
+    }
   }
 
   // Setup control panel
