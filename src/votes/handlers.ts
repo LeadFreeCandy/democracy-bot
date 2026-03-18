@@ -165,10 +165,13 @@ async function handleEndVote(
     return;
   }
 
+  // Defer reply immediately so Discord knows we're working on it
+  await interaction.deferReply();
+
   // Mark complete — the scheduler's expiration handler will pick up the rest
   completeVote(voteId);
 
-  // Compute results + graph
+  // Compute results + graph in background
   const results = computeVoteResults(voteId);
   let graphBuffer: Buffer | undefined;
   try {
@@ -177,10 +180,10 @@ async function handleEndVote(
     // Graph generation failed
   }
 
-  // Post results
+  // Post results as follow-up to the deferred reply
   const explanation = getWinnerExplanation(voteId);
   const { buildVoteResultsMessage } = await import('./components');
-  await interaction.reply(buildVoteResultsMessage(vote, results, graphBuffer, explanation));
+  await interaction.editReply(buildVoteResultsMessage(vote, results, graphBuffer, explanation));
 
   // Update the panel to show closed
   await updateVotePanel(interaction, voteId);

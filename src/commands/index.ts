@@ -70,24 +70,28 @@ export async function handleCommand(
     const user = interaction.options.getUser('user', true);
 
     attendance.set(user.id, eventDate, true);
-    await updateAttendancePanel(client);
-    await syncWatchersRole(client);
 
     await interaction.reply({
       content: `Added <@${user.id}> to the attendance list for ${eventDate}.`,
       ephemeral: true,
     });
+
+    // Update panels in background
+    updateAttendancePanel(client).catch(err => console.error('Failed to update attendance panel:', err));
+    syncWatchersRole(client).catch(err => console.error('Failed to sync watchers role:', err));
   } else if (commandName === 'removeattendee') {
     const user = interaction.options.getUser('user', true);
 
     attendance.set(user.id, eventDate, false);
-    await updateAttendancePanel(client);
-    await syncWatchersRole(client);
 
     await interaction.reply({
       content: `Removed <@${user.id}> from the attendance list for ${eventDate}.`,
       ephemeral: true,
     });
+
+    // Update panels in background
+    updateAttendancePanel(client).catch(err => console.error('Failed to update attendance panel:', err));
+    syncWatchersRole(client).catch(err => console.error('Failed to sync watchers role:', err));
   } else if (commandName === 'vote') {
     await handleVoteCommand(interaction, client);
   }

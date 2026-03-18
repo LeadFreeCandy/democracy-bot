@@ -58,12 +58,12 @@ async function handleSubmitMovieModal(
   // Add movie
   movies.add(title, userId);
 
-  // Update control panel
-  await updateControlPanel(client);
-
   await interaction.reply({
     content: `Added "${title}"! Use **Rank Movies** to rank it.`,
     ephemeral: true,
   });
   scheduleEphemeralDelete(interaction);
+
+  // Update control panel in background
+  updateControlPanel(client).catch(err => console.error('Failed to update control panel:', err));
 }

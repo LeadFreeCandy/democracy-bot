@@ -16,6 +16,14 @@ const client = new Client({
   ],
 });
 
+client.on('error', (error) => {
+  console.error('Client error:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
+});
+
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 

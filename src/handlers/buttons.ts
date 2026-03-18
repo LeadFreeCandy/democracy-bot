@@ -237,6 +237,8 @@ function buildDumpDbButtons(userId: string): ActionRowBuilder<ButtonBuilder> {
 }
 
 async function handleDumpDb(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferReply({ ephemeral: true });
+
   const userId = interaction.user.id;
   const dump = dumpDatabase();
   const asciiTable = dump.condorcet_matrix.asciiTable;
@@ -269,11 +271,10 @@ async function handleDumpDb(interaction: ButtonInteraction): Promise<void> {
     attachment: tbuffer,
     name: 'table.txt',
   });
-  await interaction.reply({
+  await interaction.editReply({
     content: '\nDatabase dump and fun facts attached:',
     files,
     components: [buttons],
-    ephemeral: true,
   });
 }
 
@@ -386,15 +387,15 @@ async function handleConfirmResetDb(interaction: ButtonInteraction, client: Clie
 }
 
 async function handleSendReminders(interaction: ButtonInteraction, client: Client): Promise<void> {
-  const { sendVoteReminder, sendAttendanceReminder } = await import('../scheduler/reminders');
-
   await interaction.update({
     embeds: [buildSuccessMessage('Sending Reminders', 'Sending vote and attendance reminders...').embeds![0]],
     components: [],
   });
 
-  await sendVoteReminder(client);
-  await sendAttendanceReminder(client);
+  // Send reminders in the background so we don't block
+  const { sendVoteReminder, sendAttendanceReminder } = await import('../scheduler/reminders');
+  sendVoteReminder(client).catch(err => console.error('Failed to send vote reminder:', err));
+  sendAttendanceReminder(client).catch(err => console.error('Failed to send attendance reminder:', err));
 }
 
 async function handleEditBack(interaction: ButtonInteraction): Promise<void> {
